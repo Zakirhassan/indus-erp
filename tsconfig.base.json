@@ -1,0 +1,33 @@
+{
+  "$schema": "https://json.schemastore.org/tsconfig",
+  "compilerOptions": {
+    "target": "ES2022",
+    "lib": ["ES2022"],
+    "module": "NodeNext",
+    "moduleResolution": "NodeNext",
+    "esModuleInterop": true,
+    "forceConsistentCasingInFileNames": true,
+    "strict": true,
+    "noUncheckedIndexedAccess": true,
+    "skipLibCheck": true,
+    "resolveJsonModule": true,
+    "declaration": true,
+    "declarationMap": true,
+    "sourceMap": true,
+    "isolatedModules": true,
+    "verbatimModuleSyntax": false,
+    "noFallthroughCasesInSwitch": true,
+    "baseUrl": ".",
+    "paths": {
+      "@indus/shared-types": ["packages/shared-types/src"],
+      "@indus/shared-types/*": ["packages/shared-types/src/*"],
+      "@indus/db": ["packages/db/src"],
+      "@indus/db/*": ["packages/db/src/*"],
+      "@indus/auth": ["packages/auth/src"],
+      "@indus/auth/*": ["packages/auth/src/*"],
+      "@indus/config": ["packages/config/src"],
+      "@indus/config/*": ["packages/config/src/*"]
+    }
+  },
+  "exclude": ["node_modules", "dist", "build"]
+}

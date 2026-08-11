@@ -1,0 +1,55 @@
+# --- Dependencies ---
+node_modules/
+.pnp
+.pnp.js
+
+# --- Build artifacts ---
+dist/
+build/
+out/
+*.tsbuildinfo
+.turbo/
+.vite/
+coverage/
+
+# --- Env / secrets ---
+.env
+.env.local
+.env.*.local
+!.env.example
+
+# --- Logs ---
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+*.log
+
+# --- Android / React Native build artifacts ---
+apps/vendor-mobile/android/app/build/
+apps/vendor-mobile/android/build/
+apps/vendor-mobile/android/.gradle/
+apps/vendor-mobile/android/local.properties
+apps/vendor-mobile/android/*.iml
+apps/vendor-mobile/ios/build/
+apps/vendor-mobile/ios/Pods/
+apps/vendor-mobile/.expo/
+*.keystore
+*.jks
+!debug.keystore
+
+# --- IDE / editor ---
+.vscode/*
+!.vscode/extensions.json
+.idea/
+*.swp
+*.swo
+.DS_Store
+Thumbs.db
+
+# --- Docker ---
+docker-data/
+
+# --- Test output ---
+junit.xml
+playwright-report/
+test-results/
