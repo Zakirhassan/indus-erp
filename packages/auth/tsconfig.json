@@ -1,0 +1,19 @@
+{
+  "$schema": "https://json.schemastore.org/tsconfig",
+  "extends": "../../tsconfig.base.json",
+  "compilerOptions": {
+    "outDir": "dist",
+    // Clears the root tsconfig's @indus/* -> sibling-src path mapping for this
+    // package's own build. That mapping is only meant for the root aggregate
+    // typecheck/editor experience — inherited into a standalone `tsc -p`
+    // build here, it makes TS resolve @indus/config and @indus/shared-types
+    // straight to their .ts source (not their built dist/), which pulls
+    // those files into this compilation and corrupts outDir into a nested
+    // dist/config/src/, dist/shared-types/src/ layout instead of a flat one.
+    // With paths cleared, @indus/* resolves the normal Node way (via the
+    // workspace symlink's package.json main/types), which is what
+    // services/api needs at runtime to actually resolve this package.
+    "paths": {}
+  },
+  "include": ["src"]
+}

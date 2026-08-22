@@ -1,0 +1,15 @@
+{
+  "$schema": "https://json.schemastore.org/tsconfig",
+  "extends": "../../tsconfig.base.json",
+  "compilerOptions": {
+    "outDir": "dist",
+    "types": ["node"],
+    // See packages/auth/tsconfig.json — clears the inherited @indus/* path
+    // mapping so a standalone `tsc -p` build resolves @indus/* via node_modules
+    // (their built dist/) instead of pulling in sibling packages' .ts source,
+    // which otherwise nests the whole monorepo under dist/packages/*, dist/services/*
+    // instead of producing a flat dist/index.js.
+    "paths": {}
+  },
+  "include": ["src"]
+}

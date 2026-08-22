@@ -1,0 +1,29 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@layer base {
+  body {
+    @apply bg-surface text-ink font-sans text-body-md antialiased;
+  }
+  /* Tabular figures for currency/quantity columns so digits align in tables. */
+  .tabular-nums {
+    font-variant-numeric: tabular-nums;
+  }
+}
+
+@layer components {
+  /* Glassmorphism accents — login card, modals, summary cards. Solid
+     light backdrop required behind these (never over the data table). */
+  .glass-panel {
+    @apply bg-glass shadow-glass border border-glass-border;
+    backdrop-filter: blur(20px);
+    -webkit-backdrop-filter: blur(20px);
+  }
+  /* Dark variant — sidebar/header over the deep-slate gradient. */
+  .glass-panel-dark {
+    @apply bg-glass-dark border border-glass-dark-border;
+    backdrop-filter: blur(20px);
+    -webkit-backdrop-filter: blur(20px);
+  }
+}

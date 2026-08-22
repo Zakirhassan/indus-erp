@@ -1,0 +1,20 @@
+{
+  "expo": {
+    "name": "Indus ERP Collector",
+    "slug": "indus-erp-vendor-mobile",
+    "scheme": "indus-erp-collector",
+    "version": "0.1.0",
+    "orientation": "portrait",
+    "userInterfaceStyle": "light",
+    "platforms": ["android"],
+    "android": {
+      "package": "com.indus.erp.vendor",
+      "adaptiveIcon": {
+        "backgroundColor": "#0f172a"
+      }
+    },
+    "extra": {
+      "apiUrl": "http://10.0.2.2:3000"
+    }
+  }
+}

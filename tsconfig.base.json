@@ -19,13 +19,13 @@
     "noFallthroughCasesInSwitch": true,
     "baseUrl": ".",
     "paths": {
-      "@indus/shared-types": ["packages/shared-types/src"],
+      "@indus/shared-types": ["packages/shared-types/src/index.ts"],
       "@indus/shared-types/*": ["packages/shared-types/src/*"],
-      "@indus/db": ["packages/db/src"],
+      "@indus/db": ["packages/db/src/index.ts"],
       "@indus/db/*": ["packages/db/src/*"],
-      "@indus/auth": ["packages/auth/src"],
+      "@indus/auth": ["packages/auth/src/index.ts"],
       "@indus/auth/*": ["packages/auth/src/*"],
-      "@indus/config": ["packages/config/src"],
+      "@indus/config": ["packages/config/src/index.ts"],
       "@indus/config/*": ["packages/config/src/*"]
     }
   },

@@ -1,0 +1,13 @@
+{
+  "$schema": "https://json.schemastore.org/tsconfig",
+  "extends": "../../tsconfig.base.json",
+  "compilerOptions": {
+    "outDir": "dist",
+    // See packages/auth/tsconfig.json for why this is cleared — same reason,
+    // and db has three cross-@indus imports (auth, config, shared-types) so
+    // the corruption without this override is even worse (nested dist/auth/src,
+    // dist/config/src, dist/shared-types/src alongside the real output).
+    "paths": {}
+  },
+  "include": ["src"]
+}

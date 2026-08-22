@@ -1,0 +1,11 @@
+node_modules
+dist
+build
+coverage
+.turbo
+.vite
+apps/vendor-mobile/android
+apps/vendor-mobile/ios
+*.md
+package-lock.json
+Indus_ERP_Tracker.xlsx

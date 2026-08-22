@@ -1,0 +1,64 @@
+name: indus-erp
+
+# Local development stack for Indus ERP.
+#
+# Usage: `npm run dev:up` (see scripts/dev-up.mjs) drives this file for you —
+# it starts Postgres, waits for it to be healthy, runs @indus/db migrations
+# and seed (once they exist), then starts the API + admin-web dev servers.
+#
+# You can also run `docker compose up -d postgres` directly if you just want
+# the database.
+
+services:
+  postgres:
+    image: postgres:16
+    container_name: indus-erp-postgres
+    restart: unless-stopped
+    environment:
+      # Fixed local-dev-only credentials — never used outside a developer's
+      # machine. Matches DATABASE_URL in .env.example.
+      POSTGRES_USER: indus
+      POSTGRES_PASSWORD: indus_dev_password
+      POSTGRES_DB: indus_erp
+    ports:
+      - "5432:5432"
+    volumes:
+      - indus-erp-postgres-data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U indus -d indus_erp"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+      start_period: 10s
+
+  # --- Uncomment once services/api exists (Orion) ---
+  # api:
+  #   build:
+  #     context: .
+  #     dockerfile: services/api/Dockerfile
+  #   container_name: indus-erp-api
+  #   restart: unless-stopped
+  #   env_file:
+  #     - .env
+  #   environment:
+  #     DATABASE_URL: postgresql://indus:indus_dev_password@postgres:5432/indus_erp
+  #   ports:
+  #     - "3000:3000"
+  #   depends_on:
+  #     postgres:
+  #       condition: service_healthy
+
+  # --- Uncomment for a Postgres admin UI (handy for manual DB inspection) ---
+  # adminer:
+  #   image: adminer:latest
+  #   container_name: indus-erp-adminer
+  #   restart: unless-stopped
+  #   ports:
+  #     - "8080:8080"
+  #   depends_on:
+  #     postgres:
+  #       condition: service_healthy
+
+volumes:
+  indus-erp-postgres-data:
+    name: indus-erp-postgres-data
