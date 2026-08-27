@@ -3,6 +3,7 @@ import { z } from "zod";
 import { requireAuth, requireRole } from "@indus/auth";
 import { Occurrence, Relation, Role } from "@indus/shared-types";
 import {
+  addSaleItem,
   approveCustomerSale,
   createCustomer,
   findUserById,
@@ -31,12 +32,15 @@ customersRouter.get(
   "/",
   asyncHandler(async (req, res) => {
     const { search, fieldId, dateFrom, dateTo, page, pageSize, submittedBy, mine } = req.query;
-    // A collector can only ever see their own submissions this way; an admin may pass ?mine=true for the same self-scoped view, or omit it for the normal approved-only dashboard list.
+    // ?mine=true scopes to the caller's own submissions (any role) — used for a "my submissions"
+    // view that includes pending ones. Otherwise a collector sees the same approved field roster
+    // as everyone else (needed to record collections against customers other collectors/admin
+    // submitted); only an admin may target a specific submitter via ?submittedBy=.
     const effectiveSubmittedBy =
-      req.user?.role === Role.Collector
-        ? req.user.userId
-        : mine === "true"
-          ? req.user?.userId
+      mine === "true"
+        ? req.user?.userId
+        : req.user?.role === Role.Collector
+          ? undefined
           : typeof submittedBy === "string"
             ? submittedBy
             : undefined;
@@ -134,6 +138,33 @@ customersRouter.get(
       return;
     }
     res.json(result);
+  }),
+);
+
+const addSaleItemSchema = z.object({
+  productId: z.string().min(1),
+  adjustedPricePaise: z.number().int().nonnegative(),
+  quantity: z.number().int().positive(),
+});
+
+customersRouter.post(
+  "/:id/items",
+  asyncHandler(async (req, res) => {
+    const parsed = addSaleItemSchema.safeParse(req.body);
+    if (!parsed.success) {
+      res.status(400).json({ error: parsed.error.issues.map((i) => i.message).join(", ") });
+      return;
+    }
+    try {
+      let addedByName: string | undefined;
+      if (req.user) {
+        const actor = await findUserById(req.user.userId);
+        addedByName = actor?.name ?? (req.user.role === Role.Collector ? "Collector" : "Admin");
+      }
+      res.json(await addSaleItem(req.params.id!, { ...parsed.data, addedByName }));
+    } catch (err) {
+      res.status(400).json({ error: err instanceof Error ? err.message : "Failed to add product" });
+    }
   }),
 );
 

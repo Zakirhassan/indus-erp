@@ -72,3 +72,8 @@ export async function rejectBatch(id: string): Promise<CollectionBatch> {
 export async function approveBatch(id: string): Promise<SaveBatchResult> {
   return api.post<SaveBatchResult>(`/api/collections/${id}/approve`);
 }
+
+/** Admin-only correction: unlocks an already-submitted batch back to DRAFT so the collector can fix an entry. */
+export async function reopenBatch(id: string, reason?: string): Promise<CollectionBatch> {
+  return api.post<CollectionBatch>(`/api/collections/${id}/reopen`, { reason });
+}

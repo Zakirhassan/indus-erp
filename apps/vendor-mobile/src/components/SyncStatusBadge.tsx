@@ -1,4 +1,5 @@
 import { StyleSheet, Text, View } from "react-native";
+import { Icon } from "./Icon";
 import { colors, radius, spacing, type as typeTokens } from "../theme";
 import { useOfflineQueue } from "../offline/OfflineQueueContext";
 
@@ -17,7 +18,7 @@ export function SyncStatusBadge() {
 
   return (
     <View style={styles.badge}>
-      <View style={[styles.dot, { backgroundColor: isOnline ? colors.warning : colors.danger }]} />
+      <Icon name={isOnline ? "sync" : "cloud-offline"} size={12} color={isOnline ? colors.warning : "#ffdad6"} />
       <Text style={styles.text}>{label}</Text>
     </View>
   );
@@ -28,12 +29,13 @@ const styles = StyleSheet.create({
     flexDirection: "row",
     alignItems: "center",
     gap: spacing.xs,
-    backgroundColor: "rgba(255,255,255,0.14)",
-    borderRadius: radius.lg,
+    backgroundColor: colors.glass,
+    borderWidth: 1,
+    borderColor: colors.glassBorder,
+    borderRadius: radius.xl,
     paddingHorizontal: spacing.sm,
     paddingVertical: 4,
     alignSelf: "flex-start",
   },
-  dot: { width: 8, height: 8, borderRadius: 4 },
   text: { ...typeTokens.labelBold, color: "#fff" },
 });

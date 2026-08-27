@@ -11,6 +11,7 @@
 import { and, eq, gte, inArray, lte } from "drizzle-orm";
 import {
   CollectionBatchStatus,
+  CustomerApprovalStatus,
   CustomerStatus,
   LedgerEntryType,
   Role,
@@ -33,6 +34,9 @@ import {
   agingBucket,
   computeScheduleStatus,
   daysBetween,
+  periodEnd,
+  periodStart,
+  shiftPeriods,
   todayIsoUtc,
   type ScheduleStatus
 } from "./scheduleMath.js";
@@ -271,9 +275,20 @@ export async function getReportsOverview(asOfDate: string = todayIso()): Promise
   const totalCollectionsMtdPaise = sumBy(collectionsMtd, (e) => e.creditPaise);
 
   const salesMtd = saleRows.filter((s) => s.saleDate >= mtdStart && s.saleDate <= asOfDate);
-  const salesYtd = saleRows.filter((s) => s.saleDate >= ytdStart && s.saleDate <= asOfDate);
-  const totalSalesMtdPaise = sumBy(salesMtd, (s) => s.finalAmountPaise);
-  const totalSalesYtdPaise = sumBy(salesYtd, (s) => s.finalAmountPaise);
+  // Revenue recognized in-period comes from Sale-type ledger entries rather than
+  // sales.saleDate — an add-on product purchase (see queries/customers.ts#addSaleItem)
+  // writes its own dated ledger entry without moving the parent sale's original saleDate,
+  // so slicing by saleDate would bury that day's add-on revenue under the sale's opening date.
+  const ledgerRowsYtd = await loadLedgerByCustomerIds(customerRows.map((c) => c.id), {
+    dateFrom: ytdStart,
+    dateTo: asOfDate
+  });
+  const saleLedgerYtd = ledgerRowsYtd.filter((e) => e.type === LedgerEntryType.Sale);
+  const totalSalesYtdPaise = sumBy(saleLedgerYtd, (e) => e.debitPaise);
+  const totalSalesMtdPaise = sumBy(
+    saleLedgerYtd.filter((e) => e.date >= mtdStart),
+    (e) => e.debitPaise
+  );
   const cashSalesMtdPaise = sumBy(
     salesMtd.filter((s) => s.advancePaise >= s.finalAmountPaise),
     (s) => s.finalAmountPaise
@@ -402,8 +417,10 @@ export async function getReportsOverview(asOfDate: string = todayIso()): Promise
   const salesTrend = months.map((m) => ({
     month: m.key,
     salesPaise: sumBy(
-      saleRows.filter((s) => s.saleDate >= m.from && s.saleDate <= m.to),
-      (s) => s.finalAmountPaise
+      allLedgerForTrend.filter(
+        (e) => e.type === LedgerEntryType.Sale && e.date >= m.from && e.date <= m.to
+      ),
+      (e) => e.debitPaise
     )
   }));
   const collectionTrend = months.map((m) => ({
@@ -509,34 +526,43 @@ async function computeSalesTotals(
 }> {
   const customerRows = await loadCustomers(fieldId);
   const customerById = new Map(customerRows.map((c) => [c.id, c]));
-  const allSales = await loadSalesByCustomerIds(customerRows.map((c) => c.id));
-  const inRange = allSales.filter((s) => s.saleDate >= dateFrom && s.saleDate <= dateTo);
+  const customerIds = customerRows.map((c) => c.id);
 
-  const grossPaise = sumBy(inRange, (s) => s.totalPaise);
-  const discountPaise = sumBy(inRange, (s) => s.discountPaise);
-  const netPaise = sumBy(inRange, (s) => s.finalAmountPaise);
+  // Discount/cash/advance are properties of how a sale was originally financed, fixed at
+  // the moment it opened — so those still key off sales opened within the range.
+  const allSales = await loadSalesByCustomerIds(customerIds);
+  const opened = allSales.filter((s) => s.saleDate >= dateFrom && s.saleDate <= dateTo);
+  const discountPaise = sumBy(opened, (s) => s.discountPaise);
+  const advancePaise = sumBy(opened, (s) => s.advancePaise);
   const cashPaise = sumBy(
-    inRange.filter((s) => s.advancePaise >= s.finalAmountPaise),
+    opened.filter((s) => s.advancePaise >= s.finalAmountPaise),
     (s) => s.finalAmountPaise
   );
-  const financePaise = netPaise - cashPaise;
-  const advancePaise = sumBy(inRange, (s) => s.advancePaise);
-  const saleCount = inRange.length;
 
-  const byDayMap = groupBy(inRange, (s) => s.saleDate);
+  // Revenue actually recognized in the range comes from Sale-type ledger entries — this
+  // covers both sales opened in range and add-on products added to older sales (see
+  // queries/customers.ts#addSaleItem), each dated to when it actually happened.
+  const ledgerRows = await loadLedgerByCustomerIds(customerIds, { dateFrom, dateTo });
+  const saleEntries = ledgerRows.filter((e) => e.type === LedgerEntryType.Sale);
+  const netPaise = sumBy(saleEntries, (e) => e.debitPaise);
+  const grossPaise = netPaise + discountPaise;
+  const financePaise = netPaise - cashPaise;
+  const saleCount = saleEntries.length;
+
+  const byDayMap = groupBy(saleEntries, (e) => e.date);
   const byDay = [...byDayMap.entries()]
     .map(([date, rows]) => ({
       date,
-      netPaise: sumBy(rows, (r) => r.finalAmountPaise),
+      netPaise: sumBy(rows, (r) => r.debitPaise),
       count: rows.length
     }))
     .sort((a, b) => a.date.localeCompare(b.date));
 
-  const byFieldMap = groupBy(inRange, (s) => customerById.get(s.customerId)?.fieldCode ?? "?");
+  const byFieldMap = groupBy(saleEntries, (e) => customerById.get(e.customerId)?.fieldCode ?? "?");
   const byField = [...byFieldMap.entries()]
     .map(([fieldCode, rows]) => ({
       fieldCode,
-      netPaise: sumBy(rows, (r) => r.finalAmountPaise),
+      netPaise: sumBy(rows, (r) => r.debitPaise),
       count: rows.length
     }))
     .sort((a, b) => b.netPaise - a.netPaise);
@@ -955,6 +981,10 @@ export interface CollectDueRow {
   amountDuePaise: number;
   daysOverdue: number;
   status: "due-today" | "overdue";
+  occurrence: Occurrence;
+  lastCollectionDate: string | null;
+  /** Up to the last 5 completed collection periods before the current (still-open) one, oldest→newest. true = a collection landed in that period. */
+  recentPeriods: boolean[];
 }
 
 export interface CollectDueReport {
@@ -963,13 +993,49 @@ export interface CollectDueReport {
   overdue: CollectDueRow[];
 }
 
+const RECENT_PERIODS = 5;
+
+/**
+ * Up to the last 5 completed periods before the current one, oldest→newest — true if a
+ * COLLECTION ledger entry landed anywhere in that period. Periods that predate the sale are
+ * omitted rather than padded with fake history.
+ */
+function recentPeriods(
+  occurrence: Occurrence,
+  saleDate: string,
+  asOfDate: string,
+  collectionDates: string[]
+): boolean[] {
+  const currentPeriodStart = periodStart(occurrence, asOfDate);
+  const out: boolean[] = [];
+  for (let i = RECENT_PERIODS; i >= 1; i--) {
+    const refDate = shiftPeriods(occurrence, currentPeriodStart, -i);
+    const pStart = periodStart(occurrence, refDate);
+    const pEnd = periodEnd(occurrence, refDate);
+    if (pEnd < saleDate) continue; // customer didn't exist yet in this period
+    out.push(collectionDates.some((d) => d >= pStart && d <= pEnd));
+  }
+  return out;
+}
+
 export async function getCollectDueReport(params: CollectDueParams): Promise<CollectDueReport> {
   const asOfDate = params.asOfDate ?? todayIso();
   const schedules = await loadActiveSchedules(params.fieldId, asOfDate);
 
+  const ledgerRows = await loadLedgerByCustomerIds(schedules.map((s) => s.customer.id));
+  const collectionDatesByCustomer = new Map<string, string[]>();
+  for (const e of ledgerRows) {
+    if (e.type !== LedgerEntryType.Collection) continue;
+    const list = collectionDatesByCustomer.get(e.customerId);
+    if (list) list.push(e.date);
+    else collectionDatesByCustomer.set(e.customerId, [e.date]);
+  }
+
   const dueToday: CollectDueRow[] = [];
   const overdue: CollectDueRow[] = [];
   for (const s of schedules) {
+    const collectionDates = collectionDatesByCustomer.get(s.customer.id) ?? [];
+    const lastCollectionDate = collectionDates.length > 0 ? collectionDates.reduce((a, b) => (b > a ? b : a)) : null;
     const base = {
       customerId: s.customer.id,
       fieldCode: s.customer.fieldCode,
@@ -977,7 +1043,10 @@ export async function getCollectDueReport(params: CollectDueParams): Promise<Col
       name: s.customer.name,
       phone: s.customer.phone,
       address: s.customer.address,
-      daysOverdue: s.status.daysOverdue
+      daysOverdue: s.status.daysOverdue,
+      occurrence: s.sale.occurrence as Occurrence,
+      lastCollectionDate,
+      recentPeriods: recentPeriods(s.sale.occurrence as Occurrence, s.sale.saleDate, asOfDate, collectionDates)
     };
     if (s.status.isOverdue) {
       overdue.push({ ...base, amountDuePaise: s.status.overdueAmountPaise, status: "overdue" });
@@ -1447,6 +1516,66 @@ export async function getStatementsReport(
   }
 
   return result;
+}
+
+// ---------------------------------------------------------------------------
+// 11. Today's add-on sales for a collector — products they added to an
+// existing customer's sale (see queries/customers.ts#addSaleItem). New sales
+// a collector opens today already surface via listCustomers({ mine, purchaseDate
+// === today }); this covers the other half so a vendor-app "today's sales" view
+// can show both without missing add-on activity.
+// ---------------------------------------------------------------------------
+
+export interface TodaysAddOnSaleRow {
+  customerId: string;
+  fieldCode: string;
+  serialNo: number;
+  name: string;
+  approvalStatus: CustomerApprovalStatus;
+  amountPaise: number;
+}
+
+export async function getTodaysAddOnSales(
+  actorName: string,
+  asOfDate: string = todayIso()
+): Promise<TodaysAddOnSaleRow[]> {
+  const ledgerRows = await db
+    .select()
+    .from(ledgerEntries)
+    .where(
+      and(
+        eq(ledgerEntries.type, LedgerEntryType.Sale),
+        eq(ledgerEntries.date, asOfDate),
+        eq(ledgerEntries.collectedBy, actorName)
+      )
+    );
+  if (ledgerRows.length === 0) return [];
+
+  const customerRows = await db
+    .select()
+    .from(customers)
+    .where(
+      inArray(
+        customers.id,
+        ledgerRows.map((e) => e.customerId)
+      )
+    );
+  const customerById = new Map(customerRows.map((c) => [c.id, c]));
+
+  const rows: TodaysAddOnSaleRow[] = [];
+  for (const entry of ledgerRows) {
+    const customer = customerById.get(entry.customerId);
+    if (!customer) continue;
+    rows.push({
+      customerId: customer.id,
+      fieldCode: customer.fieldCode,
+      serialNo: customer.serialNo,
+      name: customer.name,
+      approvalStatus: customer.approvalStatus as CustomerApprovalStatus,
+      amountPaise: entry.debitPaise
+    });
+  }
+  return rows;
 }
 
 // ---------------------------------------------------------------------------

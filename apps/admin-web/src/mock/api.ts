@@ -615,6 +615,8 @@ export async function saveCollectionBatch(input: SaveBatchInput): Promise<SaveBa
         totalAmountPaise: 0,
         status: CollectionBatchStatus.Approved,
         createdAt: todayIso(),
+        reopenedAt: null,
+        reopenedByName: null,
       };
       db.collectionBatches.push(batch);
     }

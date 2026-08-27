@@ -1,4 +1,4 @@
-import { and, count, desc, eq, gte, lte, ne } from "drizzle-orm";
+import { and, count, desc, eq, gt, gte, inArray, isNotNull, isNull, lt, lte, ne, or } from "drizzle-orm";
 import {
   CollectionBatchStatus,
   CustomerStatus,
@@ -34,6 +34,8 @@ function toBatch(row: typeof collectionBatches.$inferSelect, entries: Collection
     totalAmountPaise: row.totalAmountPaise,
     status: row.status as CollectionBatchStatus,
     createdAt: row.createdAt,
+    reopenedAt: row.reopenedAt,
+    reopenedByName: row.reopenedByName,
   };
 }
 
@@ -285,13 +287,14 @@ export async function saveCollectionBatch(input: SaveBatchInput, collectorName: 
   });
 }
 
-/** Pending/Verified batches submitted from the vendor app, awaiting admin review. */
+/** Pending/Verified batches submitted from the vendor app, awaiting admin review. Excludes DRAFT — those haven't been submitted yet. */
 export async function listPendingCollectionBatches(): Promise<CollectionBatch[]> {
   const rows = await db
     .select()
     .from(collectionBatches)
     .where(
       and(
+        ne(collectionBatches.status, CollectionBatchStatus.Draft),
         ne(collectionBatches.status, CollectionBatchStatus.Approved),
         ne(collectionBatches.status, CollectionBatchStatus.Rejected),
       ),
@@ -301,10 +304,14 @@ export async function listPendingCollectionBatches(): Promise<CollectionBatch[]>
 }
 
 /**
- * A collector submits entries from the vendor app. Unlike saveCollectionBatch,
- * nothing is posted to the ledger/balance yet — the batch sits PENDING (scoped
- * to this collector, separate from any admin direct-entry batch for the same
- * date+field) until an admin verifies/approves it.
+ * A collector saves entries from the vendor app as they go through their route.
+ * The batch sits DRAFT (scoped to this collector, separate from any admin
+ * direct-entry batch for the same date+field) — invisible to admin review and
+ * with no ledger/balance effect — until the collector submits it, either one
+ * field at a time (submitFieldBatchForDay) or for every field touched that
+ * day at once (submitDraftBatchesForDay). Once submitted, the batch is locked:
+ * further saves against the same date+field are rejected rather than silently
+ * appended, since the admin may already be reviewing it.
  */
 export async function submitCollectorBatch(
   input: SaveBatchInput,
@@ -328,9 +335,15 @@ export async function submitCollectorBatch(
         ),
       )
       .limit(1);
+    if (existingRows[0] && existingRows[0].status !== CollectionBatchStatus.Draft) {
+      throw new Error("This batch has already been submitted for approval");
+    }
     const createdAt = todayIso();
     let batchId = existingRows[0]?.id;
     const existingTotal = existingRows[0]?.totalAmountPaise ?? 0;
+    // Only a reopened batch allows editing an already-saved entry's amount in place — for a
+    // normal first-time draft, a repeat serialNo is a genuine duplicate-entry mistake and stays rejected.
+    const allowEntryEdits = !!existingRows[0]?.reopenedAt;
     if (!batchId) {
       batchId = genId("batch");
       await tx.insert(collectionBatches).values({
@@ -341,23 +354,24 @@ export async function submitCollectorBatch(
         collectorId,
         collectorName,
         totalAmountPaise: 0,
-        status: CollectionBatchStatus.Pending,
+        status: CollectionBatchStatus.Draft,
         createdAt,
       });
     }
 
     const existingEntryRows = await tx
-      .select({ serialNo: collectionEntries.serialNo })
+      .select({ id: collectionEntries.id, serialNo: collectionEntries.serialNo, amountPaise: collectionEntries.amountPaise })
       .from(collectionEntries)
       .where(eq(collectionEntries.batchId, batchId));
-    const seenSerials = new Set<number>(existingEntryRows.map((r) => r.serialNo));
+    const existingBySerial = new Map(existingEntryRows.map((r) => [r.serialNo, r]));
 
     const rejectedEntries: { serialNo: number; error: string }[] = [];
-    let addedTotal = 0;
+    let totalDelta = 0;
 
     for (const raw of input.entries) {
       if (!raw.serialNo || raw.amountPaise <= 0) continue; // blank row
-      if (seenSerials.has(raw.serialNo)) {
+      const existingEntry = existingBySerial.get(raw.serialNo);
+      if (existingEntry && !allowEntryEdits) {
         rejectedEntries.push({ serialNo: raw.serialNo, error: "Already collected in this batch" });
         continue;
       }
@@ -369,19 +383,24 @@ export async function submitCollectorBatch(
       }
 
       // Not posted yet — no ledger entry, no balance change, no auto-inactive. Deferred to approveCollectionBatch.
-      await tx.insert(collectionEntries).values({
-        id: genId("bentry"),
-        batchId,
-        customerId: customer.id,
-        serialNo: raw.serialNo,
-        amountPaise: raw.amountPaise,
-        error: null,
-      });
-      seenSerials.add(raw.serialNo);
-      addedTotal += raw.amountPaise;
+      if (existingEntry) {
+        if (existingEntry.amountPaise === raw.amountPaise) continue; // unchanged, nothing to do
+        await tx.update(collectionEntries).set({ amountPaise: raw.amountPaise, error: null }).where(eq(collectionEntries.id, existingEntry.id));
+        totalDelta += raw.amountPaise - existingEntry.amountPaise;
+      } else {
+        await tx.insert(collectionEntries).values({
+          id: genId("bentry"),
+          batchId,
+          customerId: customer.id,
+          serialNo: raw.serialNo,
+          amountPaise: raw.amountPaise,
+          error: null,
+        });
+        totalDelta += raw.amountPaise;
+      }
     }
 
-    const totalAmountPaise = existingTotal + addedTotal;
+    const totalAmountPaise = existingTotal + totalDelta;
     await tx.update(collectionBatches).set({ totalAmountPaise }).where(eq(collectionBatches.id, batchId));
 
     const batchRows = await tx.select().from(collectionBatches).where(eq(collectionBatches.id, batchId)).limit(1);
@@ -389,6 +408,147 @@ export async function submitCollectorBatch(
     const batch = toBatch(batchRows[0]!, entryRows.map(toEntry));
     return { batch, rejectedEntries };
   });
+}
+
+/** This collector's batches (any field, any status) for one day — powers the vendor app's end-of-day summary. */
+export async function listBatchesForCollectorDay(collectorId: string, date: string): Promise<CollectionBatch[]> {
+  const rows = await db
+    .select()
+    .from(collectionBatches)
+    .where(and(eq(collectionBatches.collectorId, collectorId), eq(collectionBatches.date, date)))
+    .orderBy(desc(collectionBatches.createdAt));
+  return Promise.all(rows.map(withEntries));
+}
+
+/**
+ * DRAFT -> PENDING for every one of this collector's draft batches on a given day (one per
+ * field touched), in a single end-of-day action. Batches with no entries are left as-is rather
+ * than submitted empty.
+ */
+export async function submitDraftBatchesForDay(collectorId: string, date: string): Promise<CollectionBatch[]> {
+  const draftRows = await db
+    .select()
+    .from(collectionBatches)
+    .where(
+      and(
+        eq(collectionBatches.collectorId, collectorId),
+        eq(collectionBatches.date, date),
+        eq(collectionBatches.status, CollectionBatchStatus.Draft),
+      ),
+    );
+  const submittable = draftRows.filter((r) => r.totalAmountPaise > 0);
+  if (submittable.length > 0) {
+    await db
+      .update(collectionBatches)
+      .set({ status: CollectionBatchStatus.Pending })
+      .where(
+        inArray(
+          collectionBatches.id,
+          submittable.map((r) => r.id),
+        ),
+      );
+  }
+  return listBatchesForCollectorDay(collectorId, date);
+}
+
+/**
+ * DRAFT -> PENDING for one collector's one field on a given day — lets a collector wrap up a
+ * route the moment they're done with it, without waiting on other fields. No-op (returns the
+ * batch unchanged) if there's nothing to submit or it's already past DRAFT.
+ */
+export async function submitFieldBatchForDay(
+  collectorId: string,
+  fieldId: string,
+  date: string,
+): Promise<CollectionBatch | null> {
+  const rows = await db
+    .select()
+    .from(collectionBatches)
+    .where(
+      and(
+        eq(collectionBatches.collectorId, collectorId),
+        eq(collectionBatches.fieldId, fieldId),
+        eq(collectionBatches.date, date),
+        ne(collectionBatches.status, CollectionBatchStatus.Rejected),
+      ),
+    )
+    .limit(1);
+  const row = rows[0];
+  if (!row) return null;
+  if (row.status === CollectionBatchStatus.Draft && row.totalAmountPaise > 0) {
+    await db.update(collectionBatches).set({ status: CollectionBatchStatus.Pending }).where(eq(collectionBatches.id, row.id));
+    return withEntries({ ...row, status: CollectionBatchStatus.Pending });
+  }
+  return withEntries(row);
+}
+
+/**
+ * Every DRAFT batch this collector recorded (entries > 0) on a day before `today` and never
+ * submitted. Backs the vendor app's day-close gate: a collector shouldn't be able to start a
+ * new day's collection/sales work while yesterday's route is still sitting un-submitted.
+ * Empty drafts (nothing entered) don't count — there's nothing to submit.
+ */
+export async function listUnsubmittedPriorDayBatches(collectorId: string, today: string): Promise<CollectionBatch[]> {
+  const rows = await db
+    .select()
+    .from(collectionBatches)
+    .where(
+      and(
+        eq(collectionBatches.collectorId, collectorId),
+        eq(collectionBatches.status, CollectionBatchStatus.Draft),
+        lt(collectionBatches.date, today),
+        gt(collectionBatches.totalAmountPaise, 0),
+        // A reopened batch is deliberately excluded here: it's DRAFT again so the collector
+        // can fix it, not because they forgot to submit it. Trapping them behind the day-close
+        // gate for a correction an admin asked for would leave no way to actually fix it.
+        isNull(collectionBatches.reopenedAt),
+      ),
+    )
+    .orderBy(collectionBatches.date);
+  return Promise.all(rows.map(withEntries));
+}
+
+/**
+ * DRAFT -> PENDING for every one of this collector's outstanding prior-day batches at once —
+ * the "Submit All & Continue" action on the day-close gate. Mirrors submitDraftBatchesForDay
+ * but scoped to dates before today instead of a single day.
+ */
+export async function submitAllPriorDayBatches(collectorId: string, today: string): Promise<CollectionBatch[]> {
+  const outstanding = await listUnsubmittedPriorDayBatches(collectorId, today);
+  if (outstanding.length > 0) {
+    await db
+      .update(collectionBatches)
+      .set({ status: CollectionBatchStatus.Pending })
+      .where(
+        inArray(
+          collectionBatches.id,
+          outstanding.map((b) => b.id),
+        ),
+      );
+  }
+  return listUnsubmittedPriorDayBatches(collectorId, today);
+}
+
+/**
+ * This collector's most recent submitted batches, across every field, plus any batch currently
+ * reopened for correction (status is back to DRAFT, but reopenedAt is set) — otherwise a batch
+ * reopened from a prior day would be invisible to the collector, with no way to find and fix it.
+ * An ordinary still-being-entered DRAFT (reopenedAt null) stays excluded — that's today's
+ * in-progress work, not history.
+ */
+export async function listRecentCollectorBatches(collectorId: string, limit = 20): Promise<CollectionBatch[]> {
+  const rows = await db
+    .select()
+    .from(collectionBatches)
+    .where(
+      and(
+        eq(collectionBatches.collectorId, collectorId),
+        or(ne(collectionBatches.status, CollectionBatchStatus.Draft), isNotNull(collectionBatches.reopenedAt)),
+      ),
+    )
+    .orderBy(desc(collectionBatches.date), desc(collectionBatches.createdAt))
+    .limit(limit);
+  return Promise.all(rows.map(withEntries));
 }
 
 /** Pending -> Verified: an admin checkpoint before posting. No ledger/balance effect yet. */
@@ -468,6 +628,51 @@ export async function approveCollectionBatch(id: string): Promise<SaveBatchResul
   });
 }
 
+type Tx = Parameters<Parameters<typeof db.transaction>[0]>[0];
+
+/**
+ * Reverses the ledger/balance effect of every entry in an APPROVED batch — restores each
+ * sale's balance, reactivates a customer that was auto-inactivated by this batch, and inserts
+ * an offsetting ledger entry per original entry so the reversal itself is auditable. Shared by
+ * deleteCollectionBatch (batch removed) and reopenCollectionBatch (batch unlocked for correction).
+ */
+async function reverseApprovedBatchLedgerEffects(
+  tx: Tx,
+  batch: typeof collectionBatches.$inferSelect,
+  entryRows: (typeof collectionEntries.$inferSelect)[],
+  note: string,
+): Promise<void> {
+  const createdAt = todayIso();
+  for (const entry of entryRows) {
+    const customerRows = await tx.select().from(customers).where(eq(customers.id, entry.customerId)).limit(1);
+    const customer = customerRows[0];
+    if (!customer?.saleId) continue;
+    const saleRows = await tx.select().from(sales).where(eq(sales.id, customer.saleId)).limit(1);
+    const sale = saleRows[0];
+    if (!sale) continue;
+
+    const wasInactive = customer.status === CustomerStatus.Inactive;
+    const newBalance = sale.balancePaise + entry.amountPaise;
+    await tx.update(sales).set({ balancePaise: newBalance }).where(eq(sales.id, sale.id));
+    if (wasInactive && newBalance > 0) {
+      await tx.update(customers).set({ status: CustomerStatus.Active }).where(eq(customers.id, customer.id));
+    }
+    await tx.insert(ledgerEntries).values({
+      id: genId("ledg"),
+      customerId: customer.id,
+      saleId: sale.id,
+      date: createdAt,
+      type: LedgerEntryType.Collection,
+      debitPaise: entry.amountPaise,
+      creditPaise: 0,
+      balanceAfterPaise: newBalance,
+      collectedBy: null,
+      note,
+      createdAt,
+    });
+  }
+}
+
 /** Soft-delete: reverses every posted entry's effect on the ledger/balances, then marks the batch Rejected. */
 export async function deleteCollectionBatch(id: string): Promise<void> {
   await db.transaction(async (tx) => {
@@ -477,37 +682,41 @@ export async function deleteCollectionBatch(id: string): Promise<void> {
 
     if (batch.status === CollectionBatchStatus.Approved) {
       const entryRows = await tx.select().from(collectionEntries).where(eq(collectionEntries.batchId, id));
-      const createdAt = todayIso();
-      for (const entry of entryRows) {
-        const customerRows = await tx.select().from(customers).where(eq(customers.id, entry.customerId)).limit(1);
-        const customer = customerRows[0];
-        if (!customer?.saleId) continue;
-        const saleRows = await tx.select().from(sales).where(eq(sales.id, customer.saleId)).limit(1);
-        const sale = saleRows[0];
-        if (!sale) continue;
-
-        const wasInactive = customer.status === CustomerStatus.Inactive;
-        const newBalance = sale.balancePaise + entry.amountPaise;
-        await tx.update(sales).set({ balancePaise: newBalance }).where(eq(sales.id, sale.id));
-        if (wasInactive && newBalance > 0) {
-          await tx.update(customers).set({ status: CustomerStatus.Active }).where(eq(customers.id, customer.id));
-        }
-        await tx.insert(ledgerEntries).values({
-          id: genId("ledg"),
-          customerId: customer.id,
-          saleId: sale.id,
-          date: createdAt,
-          type: LedgerEntryType.Collection,
-          debitPaise: entry.amountPaise,
-          creditPaise: 0,
-          balanceAfterPaise: newBalance,
-          collectedBy: null,
-          note: "Collection batch deleted — entry reversed",
-          createdAt,
-        });
-      }
+      await reverseApprovedBatchLedgerEffects(tx, batch, entryRows, "Collection batch deleted — entry reversed");
     }
 
     await tx.update(collectionBatches).set({ status: CollectionBatchStatus.Rejected }).where(eq(collectionBatches.id, id));
+  });
+}
+
+/**
+ * Admin-only correction path: unlocks an already-submitted (non-DRAFT) batch so the collector
+ * can fix a mistaken amount. An APPROVED batch has already posted to the ledger, so its effect
+ * is reversed first (see reverseApprovedBatchLedgerEffects) — otherwise re-approving the
+ * corrected batch would post on top of the original and double-count it. PENDING/VERIFIED/
+ * REJECTED batches never posted, so there's nothing to reverse. reopenedAt is set permanently
+ * (never cleared) as a "this batch was corrected" marker, and is what excludes the batch from
+ * the day-close gate while it sits DRAFT again (see listUnsubmittedPriorDayBatches).
+ */
+export async function reopenCollectionBatch(id: string, reopenedByName: string): Promise<CollectionBatch> {
+  return db.transaction(async (tx) => {
+    const batchRows = await tx.select().from(collectionBatches).where(eq(collectionBatches.id, id)).limit(1);
+    const batch = batchRows[0];
+    if (!batch) throw new Error("Batch not found");
+    if (batch.status === CollectionBatchStatus.Draft) throw new Error("Batch is already editable");
+
+    if (batch.status === CollectionBatchStatus.Approved) {
+      const entryRows = await tx.select().from(collectionEntries).where(eq(collectionEntries.batchId, id));
+      await reverseApprovedBatchLedgerEffects(tx, batch, entryRows, "Collection batch reopened for edit — entry reversed");
+    }
+
+    const reopenedAt = new Date().toISOString();
+    await tx
+      .update(collectionBatches)
+      .set({ status: CollectionBatchStatus.Draft, reopenedAt, reopenedByName })
+      .where(eq(collectionBatches.id, id));
+
+    const entryRows = await tx.select().from(collectionEntries).where(eq(collectionEntries.batchId, id));
+    return toBatch({ ...batch, status: CollectionBatchStatus.Draft, reopenedAt, reopenedByName }, entryRows.map(toEntry));
   });
 }

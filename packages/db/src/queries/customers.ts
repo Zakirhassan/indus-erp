@@ -1,4 +1,4 @@
-import { and, asc, count, desc, eq, gte, ilike, lte, or, sql } from "drizzle-orm";
+import { and, asc, count, desc, eq, gte, ilike, inArray, lte, or, sql } from "drizzle-orm";
 import {
   CustomerApprovalStatus,
   CustomerStatus,
@@ -25,6 +25,8 @@ export interface CustomerListRow extends Customer {
   finalAmountPaise: number;
   advancePaise: number;
   balancePaise: number;
+  /** Most recent COLLECTION ledger entry date, if any — powers "not collected in N days" filtering. */
+  lastCollectionDate: string | null;
 }
 
 export interface ListCustomersParams {
@@ -130,6 +132,23 @@ export async function listCustomers(params: ListCustomersParams = {}): Promise<P
     db.select({ value: count() }).from(customers).where(where),
   ]);
 
+  const lastCollectionRows = rows.length
+    ? await db
+        .select({ customerId: ledgerEntries.customerId, lastDate: sql<string>`max(${ledgerEntries.date})` })
+        .from(ledgerEntries)
+        .where(
+          and(
+            inArray(
+              ledgerEntries.customerId,
+              rows.map((r) => r.id),
+            ),
+            eq(ledgerEntries.type, LedgerEntryType.Collection),
+          ),
+        )
+        .groupBy(ledgerEntries.customerId)
+    : [];
+  const lastCollectionByCustomer = new Map(lastCollectionRows.map((r) => [r.customerId, r.lastDate]));
+
   const items: CustomerListRow[] = await Promise.all(
     rows.map(async (row) => {
       const saleRows = row.saleId ? await db.select().from(sales).where(eq(sales.id, row.saleId)).limit(1) : [];
@@ -145,6 +164,7 @@ export async function listCustomers(params: ListCustomersParams = {}): Promise<P
         finalAmountPaise: saleRow?.finalAmountPaise ?? 0,
         advancePaise: saleRow?.advancePaise ?? 0,
         balancePaise: saleRow?.balancePaise ?? 0,
+        lastCollectionDate: lastCollectionByCustomer.get(row.id) ?? null,
       };
     }),
   );
@@ -379,6 +399,119 @@ export async function createCustomer(input: CreateCustomerInput): Promise<Custom
       createdAt,
     };
     return { customer, sale };
+  });
+}
+
+export interface AddSaleItemInput {
+  productId: string;
+  adjustedPricePaise: number;
+  quantity: number;
+  addedByName?: string;
+}
+
+/**
+ * Adds a product to a customer's existing sale (e.g. an add-on purchase from Customer Detail),
+ * rather than opening a second sale — the schema is one sale per customer. Grows
+ * totalPaise/finalAmountPaise/balancePaise by the new item's subtotal and re-derives the
+ * installment plan from the new balance at the sale's existing installment amount (see
+ * planFromInstallmentAmount) — same math as opening the original sale, just against a bigger
+ * balance. saleDate is left untouched, so scheduleMath's derived-schedule read (see
+ * queries/scheduleMath.ts) naturally treats any already-elapsed periods as owed against the new
+ * total, consistent with there being no stored per-installment schedule to rewrite.
+ */
+export async function addSaleItem(customerId: string, input: AddSaleItemInput): Promise<CustomerWithSale> {
+  return db.transaction(async (tx) => {
+    const customerRows = await tx.select().from(customers).where(eq(customers.id, customerId)).limit(1);
+    const customerRow = customerRows[0];
+    if (!customerRow || !customerRow.saleId) throw new Error("Customer not found");
+    if (customerRow.approvalStatus !== CustomerApprovalStatus.Approved) {
+      throw new Error("Only an approved customer's sale can be added to");
+    }
+
+    const saleRows = await tx.select().from(sales).where(eq(sales.id, customerRow.saleId)).limit(1);
+    const saleRow = saleRows[0];
+    if (!saleRow) throw new Error("Sale not found");
+
+    const productRows = await tx.select().from(products).where(eq(products.id, input.productId)).limit(1);
+    const product = productRows[0];
+    if (!product) throw new Error("Product not found");
+    if (product.quantity < input.quantity) {
+      throw new Error(`Insufficient stock for ${product.name} (have ${product.quantity}, need ${input.quantity})`);
+    }
+
+    const subtotalPaise = input.adjustedPricePaise * input.quantity;
+    const createdAt = todayIso();
+
+    await tx.insert(saleItems).values({
+      id: genId("sitem"),
+      saleId: saleRow.id,
+      productId: product.id,
+      productName: product.name,
+      masterPricePaise: product.pricePaise,
+      adjustedPricePaise: input.adjustedPricePaise,
+      quantity: input.quantity,
+      subtotalPaise,
+    });
+
+    const newQuantity = product.quantity - input.quantity;
+    await tx.update(products).set({ quantity: newQuantity }).where(eq(products.id, product.id));
+    await tx.insert(inventoryTransactions).values({
+      id: genId("itxn"),
+      productId: product.id,
+      type: InventoryTxnType.SaleOut,
+      quantityDelta: -input.quantity,
+      balanceAfter: newQuantity,
+      referenceId: saleRow.id,
+      note: `Add-on sale to ${customerRow.fieldCode}-${customerRow.serialNo}`,
+      createdAt,
+    });
+
+    const totalPaise = saleRow.totalPaise + subtotalPaise;
+    const finalAmountPaise = saleRow.finalAmountPaise + subtotalPaise;
+    const balancePaise = saleRow.balancePaise + subtotalPaise;
+    const plan =
+      balancePaise > 0 && saleRow.financeAmountPaise > 0
+        ? planFromInstallmentAmount(balancePaise, saleRow.financeAmountPaise)
+        : { durationCount: 0, regularInstallmentPaise: 0, finalInstallmentPaise: 0 };
+
+    await tx
+      .update(sales)
+      .set({
+        totalPaise,
+        finalAmountPaise,
+        balancePaise,
+        durationCount: plan.durationCount,
+        regularInstallmentPaise: plan.regularInstallmentPaise,
+        finalInstallmentPaise: plan.finalInstallmentPaise,
+      })
+      .where(eq(sales.id, saleRow.id));
+
+    await tx.insert(ledgerEntries).values({
+      id: genId("ledg"),
+      customerId: customerRow.id,
+      saleId: saleRow.id,
+      date: createdAt,
+      type: LedgerEntryType.Sale,
+      debitPaise: subtotalPaise,
+      creditPaise: 0,
+      balanceAfterPaise: balancePaise,
+      collectedBy: input.addedByName ?? null,
+      note: `Add-on purchase — ${product.name} x${input.quantity}`,
+      createdAt,
+    });
+
+    // A previously paid-off (Inactive) customer buying something new is back on the books.
+    if (customerRow.status === CustomerStatus.Inactive && balancePaise > 0) {
+      await tx.update(customers).set({ status: CustomerStatus.Active }).where(eq(customers.id, customerRow.id));
+    }
+
+    const finalCustomerRows = await tx.select().from(customers).where(eq(customers.id, customerId)).limit(1);
+    const finalSaleRows = await tx.select().from(sales).where(eq(sales.id, saleRow.id)).limit(1);
+    const finalItemRows = await tx.select().from(saleItems).where(eq(saleItems.saleId, saleRow.id));
+    return {
+      customer: toCustomer(finalCustomerRows[0]!),
+      sale: toSale(finalSaleRows[0]!, finalItemRows.map(toSaleItem)),
+    };
   });
 }
 

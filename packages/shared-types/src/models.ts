@@ -132,6 +132,8 @@ export interface CollectionBatch {
   totalAmountPaise: Paise;
   status: CollectionBatchStatus;
   createdAt: string;
+  reopenedAt: string | null;
+  reopenedByName: string | null;
 }
 
 export interface ReturnRecord {

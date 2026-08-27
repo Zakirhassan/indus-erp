@@ -12,6 +12,7 @@ import { CollectionsPage } from "./pages/CollectionsPage";
 import { ApprovalsPage } from "./pages/ApprovalsPage";
 import { SettingsPage } from "./pages/SettingsPage";
 import { ReportsPage } from "./pages/ReportsPage";
+import { AuditLogPage } from "./pages/AuditLogPage";
 
 function Protected({ title, children }: { title: string; children: React.ReactElement }) {
   return (
@@ -40,6 +41,7 @@ export default function App() {
               element={<Protected title="Collection Approval Portal"><ApprovalsPage /></Protected>}
             />
             <Route path="/reports" element={<Protected title="Reports & Analytics"><ReportsPage /></Protected>} />
+            <Route path="/audit-log" element={<Protected title="Audit Log"><AuditLogPage /></Protected>} />
             <Route path="/settings" element={<Protected title="Settings"><SettingsPage /></Protected>} />
             <Route path="*" element={<Navigate to="/" replace />} />
           </Routes>

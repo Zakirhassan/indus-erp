@@ -4,11 +4,15 @@
  * installment schedule table — a sale only records its plan parameters
  * (occurrence, durationCount, regularInstallmentPaise, finalInstallmentPaise).
  * Due dates and overdue amounts are therefore derived on read: "how many
- * installment steps have elapsed since saleDate" vs. "how much has actually
- * been collected". This is an approximation (it assumes installments are due
- * evenly every `stepDays`, not against a calendar the shop may adjust for
- * holidays) — good enough for reporting/prioritization, not a substitute for
- * the ledger as the source of truth for balances.
+ * installment periods have elapsed since saleDate" vs. "how much has
+ * actually been collected". Weekly/Monthly periods are calendar-aligned
+ * (Sun–Sat weeks / calendar months, see periodStart/periodEnd below) rather
+ * than a rolling N-day window from the exact sale date — a weekly customer
+ * can pay any day of the week and still be on time, not just the exact
+ * weekday they happened to sign up on. This is still an approximation (not
+ * against a calendar the shop may adjust for holidays) — good enough for
+ * reporting/prioritization, not a substitute for the ledger as the source
+ * of truth for balances.
  */
 import { Occurrence, type Occurrence as OccurrenceType } from "@indus/shared-types";
 
@@ -37,6 +41,82 @@ export function addDaysIso(iso: string, days: number): string {
   const d = new Date(`${iso}T00:00:00Z`);
   d.setUTCDate(d.getUTCDate() + days);
   return d.toISOString().slice(0, 10);
+}
+
+/** The Sunday starting the Sun–Sat calendar week containing `iso`. */
+export function weekStartSunday(iso: string): string {
+  const d = new Date(`${iso}T00:00:00Z`);
+  d.setUTCDate(d.getUTCDate() - d.getUTCDay());
+  return d.toISOString().slice(0, 10);
+}
+
+/** First day of the calendar month containing `iso`. */
+export function monthStartIso(iso: string): string {
+  const d = new Date(`${iso}T00:00:00Z`);
+  return new Date(Date.UTC(d.getUTCFullYear(), d.getUTCMonth(), 1)).toISOString().slice(0, 10);
+}
+
+/** Last day of the calendar month containing `iso`. */
+export function monthEndIso(iso: string): string {
+  const d = new Date(`${iso}T00:00:00Z`);
+  return new Date(Date.UTC(d.getUTCFullYear(), d.getUTCMonth() + 1, 0)).toISOString().slice(0, 10);
+}
+
+/**
+ * Calendar-aligned period boundaries — a shared Sun–Sat week grid (Weekly) or calendar-month
+ * grid (Monthly), not a rolling N-day window anchored to each customer's individual sale date.
+ * This is what lets a weekly customer pay any day of the week (most pay Sunday) without being
+ * flagged overdue for missing the exact weekday they happened to sign up on. Daily is a no-op —
+ * each day already is its own period.
+ */
+export function periodStart(occurrence: OccurrenceType, iso: string): string {
+  switch (occurrence) {
+    case Occurrence.Daily:
+      return iso;
+    case Occurrence.Weekly:
+      return weekStartSunday(iso);
+    case Occurrence.Monthly:
+      return monthStartIso(iso);
+  }
+}
+
+export function periodEnd(occurrence: OccurrenceType, iso: string): string {
+  switch (occurrence) {
+    case Occurrence.Daily:
+      return iso;
+    case Occurrence.Weekly:
+      return addDaysIso(weekStartSunday(iso), 6);
+    case Occurrence.Monthly:
+      return monthEndIso(iso);
+  }
+}
+
+/** Shifts `iso` by `n` whole periods (n days / n×7 days / n calendar months). */
+export function shiftPeriods(occurrence: OccurrenceType, iso: string, n: number): string {
+  switch (occurrence) {
+    case Occurrence.Daily:
+      return addDaysIso(iso, n);
+    case Occurrence.Weekly:
+      return addDaysIso(iso, n * 7);
+    case Occurrence.Monthly: {
+      const d = new Date(`${iso}T00:00:00Z`);
+      return new Date(Date.UTC(d.getUTCFullYear(), d.getUTCMonth() + n, d.getUTCDate())).toISOString().slice(0, 10);
+    }
+  }
+}
+
+/**
+ * Number of period boundaries separating the period containing `fromIso` from the period
+ * containing `toIso` (0 if both fall in the same period).
+ */
+export function periodsBetweenCalendar(occurrence: OccurrenceType, fromIso: string, toIso: string): number {
+  if (occurrence === Occurrence.Daily) return daysBetween(fromIso, toIso);
+  const fromStart = periodStart(occurrence, fromIso);
+  const toStart = periodStart(occurrence, toIso);
+  if (occurrence === Occurrence.Weekly) return Math.round(daysBetween(fromStart, toStart) / 7);
+  const a = new Date(`${fromStart}T00:00:00Z`);
+  const b = new Date(`${toStart}T00:00:00Z`);
+  return (b.getUTCFullYear() - a.getUTCFullYear()) * 12 + (b.getUTCMonth() - a.getUTCMonth());
 }
 
 export interface SchedulePlan {
@@ -73,11 +153,10 @@ export function computeScheduleStatus(
   asOfDate: string
 ): ScheduleStatus {
   const stepDays = stepDaysFor(plan.occurrence);
-  const daysSinceSale = Math.max(0, daysBetween(plan.saleDate, asOfDate));
   const installmentsElapsed =
     plan.durationCount === 0
       ? 0
-      : Math.min(plan.durationCount, Math.floor(daysSinceSale / stepDays));
+      : Math.min(plan.durationCount, Math.max(0, periodsBetweenCalendar(plan.occurrence, plan.saleDate, asOfDate)));
 
   const expectedInstallmentsPaise =
     installmentsElapsed === 0
@@ -99,7 +178,7 @@ export function computeScheduleStatus(
       : 0;
   const overdueInstallments = Math.max(0, installmentsElapsed - installmentsPaid);
   const daysOverdue = overdueInstallments * stepDays;
-  const nextDueDate = addDaysIso(plan.saleDate, (installmentsPaid + 1) * stepDays);
+  const nextDueDate = periodEnd(plan.occurrence, shiftPeriods(plan.occurrence, plan.saleDate, installmentsPaid + 1));
 
   return {
     expectedPaidPaise,

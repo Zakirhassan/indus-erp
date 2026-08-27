@@ -1,3 +1,5 @@
+import { Easing } from "react-native";
+
 /** Color/type tokens ported 1:1 from apps/admin-web/tailwind.config.js so the vendor app reads as the same product. */
 export const colors = {
   primary: "#0f172a",
@@ -20,6 +22,17 @@ export const colors = {
   border: "#e2e8f0",
   ink: "#0b1c30",
   inkVariant: "#45464d",
+  glass: "rgba(255,255,255,0.14)",
+  glassBorder: "rgba(255,255,255,0.22)",
+};
+
+/** Gradient pairs for hero surfaces, primary CTAs, and status accents — same brand hues as `colors`, just lit. */
+export const gradients = {
+  hero: ["#0f172a", "#1e3a5f"] as const,
+  action: ["#10b981", "#0b8c5c"] as const,
+  warm: ["#f59e0b", "#dc7f0e"] as const,
+  danger: ["#e0433f", "#ba1a1a"] as const,
+  slate: ["#f8f9ff", "#e5eeff"] as const,
 };
 
 export const spacing = {
@@ -36,6 +49,7 @@ export const radius = {
   md: 8,
   lg: 12,
   xl: 16,
+  xxl: 24,
 };
 
 export const type = {
@@ -45,4 +59,21 @@ export const type = {
   bodyMd: { fontSize: 14, fontWeight: "400" as const },
   bodySm: { fontSize: 13, fontWeight: "400" as const },
   labelBold: { fontSize: 11, fontWeight: "600" as const, letterSpacing: 0.5 },
+};
+
+/** Real elevation instead of a 1px border everywhere — cross-platform (iOS shadow* + Android elevation). */
+export const shadow = {
+  sm: { shadowColor: "#0b1c30", shadowOffset: { width: 0, height: 1 }, shadowOpacity: 0.06, shadowRadius: 3, elevation: 2 },
+  md: { shadowColor: "#0b1c30", shadowOffset: { width: 0, height: 4 }, shadowOpacity: 0.08, shadowRadius: 10, elevation: 4 },
+  lg: { shadowColor: "#0b1c30", shadowOffset: { width: 0, height: 10 }, shadowOpacity: 0.12, shadowRadius: 20, elevation: 8 },
+};
+
+/** Shared motion rhythm so every screen's entrance/press animation feels like the same app. */
+export const motion = {
+  duration: { fast: 150, base: 250, slow: 400 },
+  easing: {
+    standard: Easing.bezier(0.2, 0, 0, 1),
+    decelerate: Easing.out(Easing.cubic),
+  },
+  stagger: 40,
 };

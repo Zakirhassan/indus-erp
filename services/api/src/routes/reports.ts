@@ -1,6 +1,8 @@
 import { Router } from "express";
 import { requireAuth } from "@indus/auth";
+import { Role } from "@indus/shared-types";
 import {
+  findUserById,
   getCollectDueReport,
   getCollectionsReport,
   getCustomersReport,
@@ -11,6 +13,7 @@ import {
   getReturnsReport,
   getSalesReport,
   getStatementsReport,
+  getTodaysAddOnSales,
   listCollectors,
   listProductTypes
 } from "@indus/db";
@@ -144,6 +147,19 @@ reportsRouter.get(
         compare: bool(req.query.compare)
       })
     );
+  })
+);
+
+reportsRouter.get(
+  "/today-add-on-sales",
+  asyncHandler(async (req, res) => {
+    if (!req.user) {
+      res.status(401).json({ error: "Missing bearer token" });
+      return;
+    }
+    const actor = await findUserById(req.user.userId);
+    const actorName = actor?.name ?? (req.user.role === Role.Collector ? "Collector" : "Admin");
+    res.json(await getTodaysAddOnSales(actorName, str(req.query.asOfDate)));
   })
 );
 

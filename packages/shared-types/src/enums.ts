@@ -33,6 +33,8 @@ export const Role = {
 export type Role = (typeof Role)[keyof typeof Role];
 
 export const CollectionBatchStatus = {
+  /** Being filled in by the collector during the day — not yet visible to an admin. */
+  Draft: "DRAFT",
   Pending: "PENDING",
   Verified: "VERIFIED",
   Approved: "APPROVED",

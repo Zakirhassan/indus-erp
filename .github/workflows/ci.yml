@@ -12,8 +12,29 @@ concurrency:
 
 jobs:
   build:
-    name: Install, lint, build, typecheck
+    name: Install, lint, build, typecheck, migrate, test
     runs-on: ubuntu-latest
+
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: indus
+          POSTGRES_PASSWORD: indus_ci_password
+          POSTGRES_DB: indus_erp
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U indus -d indus_erp"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+
+    env:
+      DATABASE_URL: postgresql://indus:indus_ci_password@localhost:5432/indus_erp
+      JWT_ACCESS_SECRET: ci_access_secret
+      JWT_REFRESH_SECRET: ci_refresh_secret
+
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -27,6 +48,10 @@ jobs:
       - name: Install dependencies
         run: npm ci
 
+      - name: Audit dependencies
+        run: npm audit --audit-level=high
+        continue-on-error: true
+
       - name: Lint
         run: npm run lint
 
@@ -35,6 +60,12 @@ jobs:
 
       - name: Typecheck workspaces
         run: npm run typecheck
+
+      - name: Run database migrations
+        run: npm run migrate -w packages/db
+
+      - name: Test workspaces
+        run: npm run test
 
       - name: Format check
         run: npm run format:check

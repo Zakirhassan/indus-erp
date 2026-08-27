@@ -6,13 +6,15 @@ import { Occurrence, Relation, formatINR, planFromInstallmentAmount, rupeesToPai
 import { LabeledInput } from "../components/LabeledInput";
 import { SelectField } from "../components/SelectField";
 import { PrimaryButton } from "../components/PrimaryButton";
+import { AnimatedPressable } from "../components/AnimatedPressable";
+import { Icon } from "../components/Icon";
 import { useField } from "../context/FieldContext";
 import { listProducts } from "../api/products";
 import { createCustomer } from "../api/customers";
-import { colors, radius, spacing, type as typeTokens } from "../theme";
-import type { RootStackParamList } from "../navigation/RootNavigator";
+import { colors, radius, shadow, spacing, type as typeTokens } from "../theme";
+import type { SalesStackParamList } from "../navigation/RootNavigator";
 
-type Props = NativeStackScreenProps<RootStackParamList, "NewSale">;
+type Props = NativeStackScreenProps<SalesStackParamList, "NewSale">;
 
 const RELATION_OPTIONS = [Relation.SonOf, Relation.DaughterOf, Relation.WifeOf, Relation.FatherOf, Relation.HusbandOf, Relation.CareOf];
 const OCCURRENCE_OPTIONS = [Occurrence.Daily, Occurrence.Weekly, Occurrence.Monthly];
@@ -29,7 +31,7 @@ function emptyLine(): LineItem {
 }
 
 export function NewSaleScreen({ navigation }: Props) {
-  const { activeField } = useField();
+  const { myFields, activeField, setActiveFieldId } = useField();
   const { data: productsPage } = useQuery({ queryKey: ["products-all"], queryFn: () => listProducts({ pageSize: 1000 }) });
   const products = productsPage?.items ?? [];
 
@@ -107,11 +109,14 @@ export function NewSaleScreen({ navigation }: Props) {
   if (submitted) {
     return (
       <View style={styles.center}>
+        <View style={styles.confirmIcon}>
+          <Icon name="checkmark-circle" size={32} color={colors.action} />
+        </View>
         <Text style={styles.confirmTitle}>Submitted for Approval</Text>
         <Text style={styles.confirmBody}>
           This sale won't appear on the customer ledger or affect inventory until an admin approves it.
         </Text>
-        <PrimaryButton title="Back to Dashboard" onPress={() => navigation.navigate("Dashboard")} variant="dark" />
+        <PrimaryButton title="Back to Sales" onPress={() => navigation.navigate("SalesHome")} variant="dark" />
       </View>
     );
   }
@@ -119,11 +124,27 @@ export function NewSaleScreen({ navigation }: Props) {
   return (
     <ScrollView style={styles.screen} contentContainerStyle={styles.content}>
       <Text style={styles.title}>New Sale</Text>
-      <Text style={styles.subtitle}>Route {activeField?.code ?? "—"}</Text>
+      <Text style={styles.subtitle}>Which field is this customer in?</Text>
 
-      {error ? <Text style={styles.error}>{error}</Text> : null}
+      {error ? (
+        <View style={styles.errorBox}>
+          <Icon name="alert-circle" size={16} color={colors.dangerOnContainer} />
+          <Text style={styles.error}>{error}</Text>
+        </View>
+      ) : null}
 
-      <Text style={styles.sectionTitle}>Customer Details</Text>
+      <SelectField
+        label="Field"
+        placeholder="Select field"
+        value={activeField?.id ?? ""}
+        onChange={setActiveFieldId}
+        options={myFields.map((f) => ({ value: f.id, label: `${f.code} — ${f.description}` }))}
+      />
+
+      <View style={styles.sectionHeader}>
+        <Icon name="person-outline" size={16} color={colors.ink} />
+        <Text style={styles.sectionTitle}>Customer Details</Text>
+      </View>
       <LabeledInput label="Customer Name" placeholder="e.g. Jane Doe" value={name} onChangeText={setName} />
       <View style={styles.rowGap}>
         <View style={{ flex: 1 }}>
@@ -141,13 +162,16 @@ export function NewSaleScreen({ navigation }: Props) {
       <LabeledInput label="Phone Number" placeholder="+91 00000 00000" keyboardType="phone-pad" value={phone} onChangeText={setPhone} />
       <LabeledInput label="Delivery Address" placeholder="House, street, area" value={address} onChangeText={setAddress} />
 
-      <Text style={styles.sectionTitle}>Product Details</Text>
+      <View style={styles.sectionHeader}>
+        <Icon name="cube-outline" size={16} color={colors.ink} />
+        <Text style={styles.sectionTitle}>Product Details</Text>
+      </View>
       {lines.map((line) => {
         const product = products.find((p) => p.id === line.productId);
         const adjustedPricePaise = line.adjustedPriceRupees ? rupeesToPaise(Number(line.adjustedPriceRupees)) : (product?.pricePaise ?? 0);
         const subtotal = adjustedPricePaise * Math.max(1, Number(line.quantity) || 1);
         return (
-          <View key={line.key} style={styles.productCard}>
+          <View key={line.key} style={[styles.productCard, shadow.sm]}>
             <SelectField
               placeholder="Select inventory item…"
               searchable
@@ -174,21 +198,27 @@ export function NewSaleScreen({ navigation }: Props) {
                 />
               </View>
             </View>
-            <Text style={styles.subtotal}>Subtotal: {formatINR(subtotal)}</Text>
-            {lines.length > 1 ? (
-              <Text style={styles.remove} onPress={() => setLines((prev) => prev.filter((l) => l.key !== line.key))}>
-                Remove
-              </Text>
-            ) : null}
+            <View style={styles.productFooter}>
+              <Text style={styles.subtotal}>Subtotal: {formatINR(subtotal)}</Text>
+              {lines.length > 1 ? (
+                <AnimatedPressable onPress={() => setLines((prev) => prev.filter((l) => l.key !== line.key))}>
+                  <Text style={styles.remove}>Remove</Text>
+                </AnimatedPressable>
+              ) : null}
+            </View>
           </View>
         );
       })}
-      <Text style={styles.addRow} onPress={() => setLines((prev) => [...prev, emptyLine()])}>
-        + Add Another Item
-      </Text>
+      <AnimatedPressable style={styles.addRowButton} onPress={() => setLines((prev) => [...prev, emptyLine()])}>
+        <Icon name="add-circle-outline" size={18} color={colors.action} />
+        <Text style={styles.addRow}>Add Another Item</Text>
+      </AnimatedPressable>
 
-      <Text style={styles.sectionTitle}>Finance Details</Text>
-      <View style={styles.summaryCard}>
+      <View style={styles.sectionHeader}>
+        <Icon name="calculator-outline" size={16} color={colors.ink} />
+        <Text style={styles.sectionTitle}>Finance Details</Text>
+      </View>
+      <View style={[styles.summaryCard, shadow.sm]}>
         <View style={styles.summaryRow}>
           <Text style={styles.summaryLabel}>Total</Text>
           <Text style={styles.summaryValue}>{formatINR(computed.totalPaise)}</Text>
@@ -238,6 +268,7 @@ export function NewSaleScreen({ navigation }: Props) {
         title={submitting ? "Submitting…" : "Create Sale & Add Customer"}
         onPress={onSubmit}
         loading={submitting}
+        icon="checkmark-done"
       />
       <PrimaryButton title="Cancel" onPress={() => navigation.goBack()} variant="secondary" />
     </ScrollView>
@@ -249,24 +280,31 @@ const styles = StyleSheet.create({
   content: { padding: spacing.lg, paddingTop: 56, gap: spacing.md, paddingBottom: spacing.xxl },
   title: { ...typeTokens.headlineMd, color: colors.ink },
   subtitle: { ...typeTokens.bodySm, color: colors.inkVariant },
-  sectionTitle: { ...typeTokens.titleSm, color: colors.ink, marginTop: spacing.sm },
+  sectionHeader: { flexDirection: "row", alignItems: "center", gap: spacing.xs, marginTop: spacing.sm },
+  sectionTitle: { ...typeTokens.titleSm, color: colors.ink },
   rowGap: { flexDirection: "row", gap: spacing.sm },
-  productCard: { borderWidth: 1, borderColor: colors.border, borderRadius: radius.lg, padding: spacing.md, gap: spacing.sm, backgroundColor: colors.surfaceLowest },
+  productCard: { borderRadius: radius.xxl, padding: spacing.md, gap: spacing.sm, backgroundColor: colors.surfaceLowest },
+  productFooter: { flexDirection: "row", justifyContent: "space-between", alignItems: "center" },
   subtotal: { ...typeTokens.bodySm, color: colors.inkVariant },
   remove: { ...typeTokens.bodySm, color: colors.danger, fontWeight: "600" },
+  addRowButton: { flexDirection: "row", alignItems: "center", gap: spacing.xs },
   addRow: { ...typeTokens.bodyMd, color: colors.action, fontWeight: "600" },
-  summaryCard: { borderWidth: 1, borderColor: colors.border, borderRadius: radius.lg, padding: spacing.md, backgroundColor: colors.surfaceLowest, gap: spacing.xs },
+  summaryCard: { borderRadius: radius.xxl, padding: spacing.md, backgroundColor: colors.surfaceLowest, gap: spacing.xs },
   summaryRow: { flexDirection: "row", justifyContent: "space-between" },
   summaryLabel: { ...typeTokens.bodySm, color: colors.inkVariant },
   summaryValue: { ...typeTokens.bodyMd, color: colors.ink, fontWeight: "600" },
-  error: {
-    ...typeTokens.bodySm,
-    color: colors.dangerOnContainer,
-    backgroundColor: colors.dangerContainer,
-    borderRadius: radius.md,
-    padding: spacing.sm,
-  },
+  errorBox: { flexDirection: "row", alignItems: "center", gap: spacing.xs, backgroundColor: colors.dangerContainer, borderRadius: radius.md, padding: spacing.sm },
+  error: { ...typeTokens.bodySm, color: colors.dangerOnContainer },
   center: { flex: 1, alignItems: "center", justifyContent: "center", padding: spacing.xl, gap: spacing.md, backgroundColor: colors.surface },
+  confirmIcon: {
+    width: 64,
+    height: 64,
+    borderRadius: radius.xxl,
+    backgroundColor: colors.actionContainer,
+    alignItems: "center",
+    justifyContent: "center",
+    marginBottom: spacing.xs,
+  },
   confirmTitle: { ...typeTokens.headlineMd, color: colors.ink },
   confirmBody: { ...typeTokens.bodyMd, color: colors.inkVariant, textAlign: "center" },
 });

@@ -310,6 +310,8 @@ export function buildSeed(): Db {
           totalAmountPaise: 0,
           status: CollectionBatchStatus.Approved,
           createdAt: entryDate,
+          reopenedAt: null,
+          reopenedByName: null,
         };
         collectionBatches.push(batch);
       }
@@ -390,6 +392,8 @@ export function buildSeed(): Db {
       totalAmountPaise: entries.reduce((s, e) => s + e.amountPaise, 0),
       status: CollectionBatchStatus.Pending,
       createdAt: date,
+      reopenedAt: null,
+      reopenedByName: null,
     });
   }
 

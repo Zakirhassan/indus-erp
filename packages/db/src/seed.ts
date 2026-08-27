@@ -72,23 +72,32 @@ function installmentAmountFor(occurrence: OccurrenceType): number {
 }
 
 async function main() {
+  if (process.env.NODE_ENV === "production") {
+    throw new Error("[seed] Refusing to run demo-data seed against a production environment (NODE_ENV=production).");
+  }
+
   console.log("[seed] Seeding fields...");
   const fieldRows = FIELD_DEFS.map((f) => ({ id: genId("field"), code: f.code, description: f.description, active: true }));
   await db.insert(fields).values(fieldRows).onConflictDoNothing();
-  const byCode = (code: string) => fieldRows.find((f) => f.code === code)!;
+  const existingFields = await db.select({ id: fields.id, code: fields.code, description: fields.description }).from(fields);
+  const byCode = (code: string) => existingFields.find((f) => f.code === code)!;
 
   console.log("[seed] Seeding demo users...");
   const userDefs = [
     { name: "Sarah Jenkins", email: "admin@proledger.local", password: "admin123", role: Role.Admin, fieldCodes: [] as string[] },
-    { name: "Ram Babu", email: "rambabu@proledger.local", password: "collector123", role: Role.Collector, fieldCodes: ["C1", "D1"] },
+    { name: "Ram Babu", email: "rambabu@proledger.local", password: "collector123", role: Role.Collector, fieldCodes: ["C1", "D1", "D2", "E1"] },
     { name: "Michael Kane", email: "mkane@proledger.local", password: "collector123", role: Role.Collector, fieldCodes: ["D2", "E1"] },
   ];
   for (const u of userDefs) {
     const passwordHash = await hashPassword(u.password);
-    const userId = genId("user");
-    await db.insert(users).values({ id: userId, name: u.name, email: u.email, passwordHash, role: u.role, lastActiveAt: new Date() }).onConflictDoNothing();
+    const [inserted] = await db
+      .insert(users)
+      .values({ id: genId("user"), name: u.name, email: u.email, passwordHash, role: u.role, lastActiveAt: new Date() })
+      .onConflictDoNothing()
+      .returning({ id: users.id });
+    const userId = inserted?.id ?? (await db.select({ id: users.id }).from(users).where(eq(users.email, u.email)))[0]!.id;
     for (const code of u.fieldCodes) {
-      await db.insert(userFields).values({ userId, fieldId: byCode(code).id });
+      await db.insert(userFields).values({ userId, fieldId: byCode(code).id }).onConflictDoNothing();
     }
   }
 
@@ -118,8 +127,8 @@ async function main() {
   }
 
   console.log("[seed] Seeding demo customers + sales + ledger history...");
-  const serialByField: Record<string, number> = Object.fromEntries(fieldRows.map((f) => [f.code, 0]));
-  for (const field of fieldRows) {
+  const serialByField: Record<string, number> = Object.fromEntries(existingFields.map((f) => [f.code, 0]));
+  for (const field of existingFields) {
     for (let i = 0; i < 6; i++) {
       serialByField[field.code] = (serialByField[field.code] ?? 0) + 1;
       const serialNo = serialByField[field.code]!;

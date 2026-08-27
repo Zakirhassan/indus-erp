@@ -8,6 +8,7 @@ const navItems = [
   { to: "/collections", label: "Collection" },
   { to: "/collections/approvals", label: "Approvals" },
   { to: "/reports", label: "Reports" },
+  { to: "/audit-log", label: "Audit Log" },
   { to: "/settings", label: "Settings" },
 ];
 

@@ -1,5 +1,6 @@
 import { useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import { Eye, Undo2, UserX } from "lucide-react";
 import { formatINR } from "@indus/shared-types";
 import { DataTable, type Column } from "../components/DataTable";
 import { Button } from "../components/Button";
@@ -93,28 +94,31 @@ export function CustomersPage() {
       align: "right",
       render: (c) => (
         <div className="flex justify-end gap-3 text-body-sm">
-          <button className="text-primary hover:underline" onClick={() => setLedgerCustomerId(c.id)}>
-            View Collection
+          <button
+            className="inline-flex items-center gap-1 text-primary hover:underline"
+            onClick={() => setLedgerCustomerId(c.id)}
+          >
+            <Eye size={14} /> View Collection
           </button>
           {c.status === "ACTIVE" && (
             <>
               <button
-                className="text-ink-variant hover:underline"
+                className="inline-flex items-center gap-1 text-ink-variant hover:underline"
                 onClick={() => {
                   if (confirm(`Mark ${c.name} inactive?`)) inactivateMutation.mutate(c.id);
                 }}
               >
-                Mark Inactive
+                <UserX size={14} /> Mark Inactive
               </button>
               <button
-                className="text-danger hover:underline"
+                className="inline-flex items-center gap-1 text-danger hover:underline"
                 onClick={() => {
                   if (!confirm(`Process a return for ${c.name}? This restores inventory and refunds the advance.`)) return;
                   const reason = prompt("Reason for return (optional) — e.g. Product Defect, Customer Relocated, Dissatisfied:") ?? undefined;
                   returnMutation.mutate({ id: c.id, reason: reason?.trim() || undefined });
                 }}
               >
-                Mark Return
+                <Undo2 size={14} /> Mark Return
               </button>
             </>
           )}

@@ -31,22 +31,21 @@ services:
       retries: 10
       start_period: 10s
 
-  # --- Uncomment once services/api exists (Orion) ---
-  # api:
-  #   build:
-  #     context: .
-  #     dockerfile: services/api/Dockerfile
-  #   container_name: indus-erp-api
-  #   restart: unless-stopped
-  #   env_file:
-  #     - .env
-  #   environment:
-  #     DATABASE_URL: postgresql://indus:indus_dev_password@postgres:5432/indus_erp
-  #   ports:
-  #     - "3000:3000"
-  #   depends_on:
-  #     postgres:
-  #       condition: service_healthy
+  api:
+    build:
+      context: .
+      dockerfile: services/api/Dockerfile
+    container_name: indus-erp-api
+    restart: unless-stopped
+    env_file:
+      - .env
+    environment:
+      DATABASE_URL: postgresql://indus:indus_dev_password@postgres:5432/indus_erp
+    ports:
+      - "3000:3000"
+    depends_on:
+      postgres:
+        condition: service_healthy
 
   # --- Uncomment for a Postgres admin UI (handy for manual DB inspection) ---
   # adminer:

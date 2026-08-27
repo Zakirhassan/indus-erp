@@ -1,163 +1,214 @@
 import { useMemo, useState } from "react";
-import { useQuery } from "@tanstack/react-query";
-import { FlatList, Modal, Pressable, StyleSheet, Text, TouchableOpacity, View } from "react-native";
+import { useMutation, useQueries, useQuery, useQueryClient } from "@tanstack/react-query";
+import { FlatList, StyleSheet, Text, View } from "react-native";
+import { LinearGradient } from "expo-linear-gradient";
 import type { NativeStackScreenProps } from "@react-navigation/native-stack";
-import { formatINR } from "@indus/shared-types";
+import { CollectionBatchStatus, formatINR } from "@indus/shared-types";
 import { StatCard } from "../components/StatCard";
-import { StatusBadge } from "../components/StatusBadge";
 import { SyncStatusBadge } from "../components/SyncStatusBadge";
-import { SelectField } from "../components/SelectField";
+import { PrimaryButton } from "../components/PrimaryButton";
+import { AnimatedPressable } from "../components/AnimatedPressable";
+import { FadeInUp } from "../components/FadeInUp";
+import { Icon } from "../components/Icon";
+import { ProgressBar } from "../components/ProgressBar";
+import { EmptyState } from "../components/EmptyState";
+import { SkeletonCard } from "../components/Skeleton";
+import { OccurrenceFilter, type OccurrenceFilterValue } from "../components/OccurrenceFilter";
 import { useAuth } from "../context/AuthContext";
 import { useField } from "../context/FieldContext";
 import { getCollectDueReport, type CollectDueRow } from "../api/reports";
-import { myBatch } from "../api/collections";
-import { colors, radius, spacing, type as typeTokens } from "../theme";
-import type { RootStackParamList } from "../navigation/RootNavigator";
+import { myBatchesToday, submitDayBatches } from "../api/collections";
+import { colors, gradients, radius, shadow, spacing, type as typeTokens } from "../theme";
+import type { DashboardStackParamList } from "../navigation/RootNavigator";
 
-type Props = NativeStackScreenProps<RootStackParamList, "Dashboard">;
+type Props = NativeStackScreenProps<DashboardStackParamList, "DashboardHome">;
 
 function todayIso(): string {
   return new Date().toISOString().slice(0, 10);
 }
 
+/** Last-5-periods payment history strip — green if a collection landed in that period, red if not. */
+function CollectionDots({ periods }: { periods: boolean[] }) {
+  return (
+    <View style={styles.dotsRow}>
+      {periods.map((collected, i) => (
+        <View key={i} style={[styles.dot, { backgroundColor: collected ? colors.action : colors.danger }]} />
+      ))}
+    </View>
+  );
+}
+
 export function DashboardScreen({ navigation }: Props) {
   const { session, logout } = useAuth();
-  const { myFields, activeField, setActiveFieldId } = useField();
-  const [menuOpen, setMenuOpen] = useState(false);
+  const { myFields } = useField();
   const today = todayIso();
+  const queryClient = useQueryClient();
+  const [occurrenceFilter, setOccurrenceFilter] = useState<OccurrenceFilterValue>("ALL");
 
-  const { data: dueReport, isLoading } = useQuery({
-    queryKey: ["collect-due", activeField?.id],
-    queryFn: () => getCollectDueReport(activeField!.id),
-    enabled: !!activeField,
+  // "Whom to collect today" spans every field this collector is assigned to, not just one —
+  // there's no single active field anymore now that Collection has its own per-field cards.
+  const dueQueries = useQueries({
+    queries: myFields.map((f) => ({
+      queryKey: ["collect-due", f.id],
+      queryFn: () => getCollectDueReport(f.id),
+    })),
+  });
+  const isLoading = dueQueries.some((q) => q.isLoading);
+
+  const { data: todaysBatches } = useQuery({
+    queryKey: ["my-batches-today", today],
+    queryFn: () => myBatchesToday(today),
   });
 
-  const { data: todaysBatch } = useQuery({
-    queryKey: ["my-batch", activeField?.id, today],
-    queryFn: () => myBatch(today, activeField!.id),
-    enabled: !!activeField,
+  const submitDay = useMutation({
+    mutationFn: () => submitDayBatches(today),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["my-batches-today", today] });
+      queryClient.invalidateQueries({ queryKey: ["my-batch"] });
+    },
   });
 
-  const tasks: CollectDueRow[] = useMemo(
-    () => [...(dueReport?.overdue ?? []), ...(dueReport?.dueToday ?? [])],
-    [dueReport],
+  const allTasks: CollectDueRow[] = useMemo(
+    () => dueQueries.flatMap((q) => [...(q.data?.overdue ?? []), ...(q.data?.dueToday ?? [])]),
+    [dueQueries],
   );
-  const totalToCollectPaise = tasks.reduce((s, t) => s + t.amountDuePaise, 0);
-  const collectedTodayPaise = todaysBatch?.totalAmountPaise ?? 0;
-  const customersVisited = todaysBatch?.entries.length ?? 0;
+  const tasks = useMemo(
+    () => (occurrenceFilter === "ALL" ? allTasks : allTasks.filter((t) => t.occurrence === occurrenceFilter)),
+    [allTasks, occurrenceFilter],
+  );
+  const totalToCollectPaise = allTasks.reduce((s, t) => s + t.amountDuePaise, 0);
+  const batchesTouchedToday = todaysBatches?.filter((b) => b.entries.length > 0) ?? [];
+  const draftBatches = batchesTouchedToday.filter((b) => b.status === CollectionBatchStatus.Draft);
+  const collectedTodayPaise = batchesTouchedToday.reduce((s, b) => s + b.totalAmountPaise, 0);
+  const customersVisited = batchesTouchedToday.reduce((s, b) => s + b.entries.length, 0);
+  const dayProgress = totalToCollectPaise + collectedTodayPaise > 0 ? collectedTodayPaise / (totalToCollectPaise + collectedTodayPaise) : 0;
+
+  function openDraft(fieldId: string) {
+    // Cross-tab navigation: the draft lives in the Collection tab's own stack, not this one.
+    // getParent() returns the tab navigator's untyped prop, so the nested screen+params shape isn't checked here.
+    (navigation.getParent() as { navigate: (tab: string, opts: { screen: string; params: unknown }) => void } | undefined)?.navigate(
+      "CollectionTab",
+      { screen: "AddCollection", params: { fieldId } },
+    );
+  }
 
   return (
     <View style={styles.screen}>
-      <View style={styles.header}>
-        <View>
-          <Text style={styles.greeting}>Hello, {session?.name ?? "Collector"}!</Text>
-          <Text style={styles.date}>
-            {new Date().toLocaleDateString(undefined, { weekday: "long", year: "numeric", month: "long", day: "numeric" })}
-          </Text>
-          <View style={styles.syncRow}>
-            <SyncStatusBadge />
+      <LinearGradient colors={gradients.hero} style={styles.header} start={{ x: 0, y: 0 }} end={{ x: 1, y: 1 }}>
+        <View style={styles.headerRow}>
+          <View style={{ flex: 1 }}>
+            <Text style={styles.greeting}>Hello, {session?.name ?? "Collector"}!</Text>
+            <Text style={styles.date}>
+              {new Date().toLocaleDateString(undefined, { weekday: "long", year: "numeric", month: "long", day: "numeric" })}
+            </Text>
           </View>
+          <AnimatedPressable onPress={logout} style={styles.logoutButton}>
+            <Icon name="log-out-outline" size={18} color="#fff" />
+          </AnimatedPressable>
         </View>
-        <Pressable onPress={logout}>
-          <Text style={styles.logout}>Sign Out</Text>
-        </Pressable>
-      </View>
+        <View style={styles.syncRow}>
+          <SyncStatusBadge />
+        </View>
+        <View style={styles.progressWrap}>
+          <ProgressBar progress={dayProgress} />
+          <Text style={styles.progressLabel}>{Math.round(dayProgress * 100)}% of today's due collected</Text>
+        </View>
+      </LinearGradient>
 
       <View style={styles.body}>
-        <SelectField
-          label="Active Field"
-          placeholder="Select field"
-          value={activeField?.id ?? ""}
-          onChange={setActiveFieldId}
-          options={myFields.map((f) => ({ value: f.id, label: `${f.code} — ${f.description}` }))}
-        />
-
         <View style={styles.statsRow}>
-          <StatCard
-            label="Total to Collect"
-            value={formatINR(totalToCollectPaise)}
-            sublabel={`${tasks.length} Customers Remaining`}
-          />
+          <StatCard label="Total to Collect" value={formatINR(totalToCollectPaise)} sublabel={`${tasks.length} Customers Remaining`} icon="wallet-outline" />
           <StatCard
             label="Collected Today"
             value={formatINR(collectedTodayPaise)}
             sublabel={`${customersVisited} Customers Visited`}
             tone="action"
+            icon="trending-up"
           />
         </View>
 
+        {draftBatches.length > 0 ? (
+          <FadeInUp>
+            <View style={styles.draftBanner}>
+              <View style={styles.draftHeader}>
+                <Icon name="document-text-outline" size={16} color={colors.ink} />
+                <Text style={styles.draftTitle}>Today's Draft Collections</Text>
+              </View>
+              {draftBatches.map((b) => (
+                <AnimatedPressable key={b.id} style={styles.draftRow} onPress={() => openDraft(b.fieldId)}>
+                  <Text style={styles.draftFieldLabel}>{b.fieldCode}</Text>
+                  <View style={styles.draftRowRight}>
+                    <Text style={styles.draftFieldAmount}>{formatINR(b.totalAmountPaise)}</Text>
+                    <Icon name="chevron-forward" size={14} color={colors.action} />
+                  </View>
+                </AnimatedPressable>
+              ))}
+              <PrimaryButton
+                title={submitDay.isPending ? "Submitting…" : "Submit All for Approval"}
+                onPress={() => submitDay.mutate()}
+                loading={submitDay.isPending}
+                variant="dark"
+                icon="checkmark-done"
+              />
+              {submitDay.isError ? <Text style={styles.draftError}>Failed to submit. Try again.</Text> : null}
+            </View>
+          </FadeInUp>
+        ) : null}
+
         <View style={styles.tasksHeader}>
           <Text style={styles.sectionTitle}>Today's Tasks</Text>
-          <View style={styles.headerLinks}>
-            <Pressable onPress={() => navigation.navigate("Customers")}>
-              <Text style={styles.link}>My Customers</Text>
-            </Pressable>
-            <Pressable onPress={() => navigation.navigate("TodaysSales")}>
-              <Text style={styles.link}>Today's Sales</Text>
-            </Pressable>
-          </View>
+          <OccurrenceFilter value={occurrenceFilter} onChange={setOccurrenceFilter} />
         </View>
 
-        <FlatList
-          data={tasks}
-          keyExtractor={(item) => item.customerId}
-          style={styles.list}
-          contentContainerStyle={{ paddingBottom: spacing.xxl }}
-          refreshing={isLoading}
-          renderItem={({ item }) => (
-            <TouchableOpacity
-              style={styles.taskRow}
-              onPress={() => navigation.navigate("CustomerDetail", { customerId: item.customerId })}
-            >
-              <View style={styles.taskLeft}>
-                <View style={styles.avatar}>
-                  <Text style={styles.avatarText}>{item.name.slice(0, 2).toUpperCase()}</Text>
-                </View>
-                <View>
-                  <Text style={styles.taskName}>
-                    #{item.serialNo} {item.name}
-                  </Text>
-                  <Text style={styles.taskAddress}>{item.address}</Text>
-                  {item.status === "overdue" ? <StatusBadge status="overdue" /> : null}
-                </View>
-              </View>
-              <Text style={styles.taskAmount}>{formatINR(item.amountDuePaise)}</Text>
-            </TouchableOpacity>
-          )}
-          ListEmptyComponent={
-            !isLoading ? <Text style={styles.empty}>Nothing due for this field today.</Text> : null
-          }
-        />
-      </View>
-
-      <Pressable style={styles.fab} onPress={() => setMenuOpen(true)}>
-        <Text style={styles.fabText}>+</Text>
-      </Pressable>
-
-      <Modal visible={menuOpen} transparent animationType="fade" onRequestClose={() => setMenuOpen(false)}>
-        <Pressable style={styles.backdrop} onPress={() => setMenuOpen(false)}>
-          <View style={styles.menu}>
-            <Pressable
-              style={styles.menuItem}
-              onPress={() => {
-                setMenuOpen(false);
-                navigation.navigate("AddCollection");
-              }}
-            >
-              <Text style={styles.menuItemText}>Record Collection</Text>
-            </Pressable>
-            <Pressable
-              style={styles.menuItem}
-              onPress={() => {
-                setMenuOpen(false);
-                navigation.navigate("NewSale");
-              }}
-            >
-              <Text style={styles.menuItemText}>New Sale</Text>
-            </Pressable>
+        {isLoading && tasks.length === 0 ? (
+          <View style={{ gap: spacing.sm }}>
+            <SkeletonCard height={68} />
+            <SkeletonCard height={68} />
+            <SkeletonCard height={68} />
           </View>
-        </Pressable>
-      </Modal>
+        ) : (
+          <FlatList
+            data={tasks}
+            keyExtractor={(item) => item.customerId}
+            style={styles.list}
+            contentContainerStyle={{ paddingBottom: spacing.xxl, gap: spacing.sm }}
+            refreshing={isLoading}
+            renderItem={({ item, index }) => (
+              <FadeInUp delay={Math.min(index, 8) * 40}>
+                <AnimatedPressable
+                  style={styles.taskRow}
+                  onPress={() => navigation.navigate("CustomerDetail", { customerId: item.customerId })}
+                >
+                  <View style={styles.taskLeft}>
+                    <View style={styles.avatar}>
+                      <Text style={styles.avatarText}>{item.fieldCode}</Text>
+                    </View>
+                    <View style={{ flex: 1 }}>
+                      <Text style={styles.taskName} numberOfLines={1}>
+                        {item.fieldCode}-{item.serialNo} {item.name}
+                      </Text>
+                      <Text style={styles.taskAddress} numberOfLines={1}>
+                        {item.address}
+                      </Text>
+                      <View style={styles.collectionHistoryRow}>
+                        <Text style={styles.lastCollected}>
+                          {item.lastCollectionDate ? `Last collected ${item.lastCollectionDate}` : "No collections yet"}
+                        </Text>
+                        <CollectionDots periods={item.recentPeriods} />
+                      </View>
+                    </View>
+                  </View>
+                  <View style={styles.taskRight}>
+                    <Text style={styles.taskAmount}>{formatINR(item.amountDuePaise)}</Text>
+                    <Icon name="chevron-forward" size={16} color={colors.inkVariant} />
+                  </View>
+                </AnimatedPressable>
+              </FadeInUp>
+            )}
+            ListEmptyComponent={!isLoading ? <EmptyState icon="checkmark-circle-outline" title="Nothing due today" subtitle="You're all caught up on collections." /> : null}
+          />
+        )}
+      </View>
     </View>
   );
 }
@@ -165,62 +216,71 @@ export function DashboardScreen({ navigation }: Props) {
 const styles = StyleSheet.create({
   screen: { flex: 1, backgroundColor: colors.surface },
   header: {
-    backgroundColor: colors.primary,
     paddingTop: 56,
     paddingBottom: spacing.lg,
     paddingHorizontal: spacing.lg,
-    flexDirection: "row",
-    justifyContent: "space-between",
-    alignItems: "flex-start",
+    gap: spacing.sm,
   },
+  headerRow: { flexDirection: "row", justifyContent: "space-between", alignItems: "flex-start" },
   greeting: { ...typeTokens.headlineMd, color: "#fff" },
   date: { ...typeTokens.bodySm, color: "#cbd5e1", marginTop: 2 },
-  syncRow: { marginTop: spacing.sm },
-  logout: { ...typeTokens.bodySm, color: "#cbd5e1", textDecorationLine: "underline" },
+  logoutButton: {
+    width: 36,
+    height: 36,
+    borderRadius: radius.lg,
+    backgroundColor: colors.glass,
+    borderWidth: 1,
+    borderColor: colors.glassBorder,
+    alignItems: "center",
+    justifyContent: "center",
+  },
+  syncRow: {},
+  progressWrap: { gap: spacing.xs, marginTop: spacing.xs },
+  progressLabel: { ...typeTokens.bodySm, color: "rgba(255,255,255,0.8)" },
   body: { flex: 1, padding: spacing.lg, gap: spacing.md },
   statsRow: { flexDirection: "row", gap: spacing.md },
+  draftBanner: {
+    backgroundColor: colors.surfaceLowest,
+    borderRadius: radius.xxl,
+    padding: spacing.md,
+    gap: spacing.sm,
+    ...shadow.sm,
+  },
+  draftHeader: { flexDirection: "row", alignItems: "center", gap: spacing.xs },
+  draftTitle: { ...typeTokens.labelBold, color: colors.ink },
+  draftRow: { flexDirection: "row", justifyContent: "space-between", alignItems: "center", paddingVertical: 4 },
+  draftRowRight: { flexDirection: "row", alignItems: "center", gap: spacing.xs },
+  draftFieldLabel: { ...typeTokens.bodySm, color: colors.inkVariant },
+  draftFieldAmount: { ...typeTokens.bodySm, color: colors.ink, fontWeight: "600" },
+  draftError: { ...typeTokens.bodySm, color: colors.dangerOnContainer },
   tasksHeader: { flexDirection: "row", justifyContent: "space-between", alignItems: "center", marginTop: spacing.sm },
-  headerLinks: { flexDirection: "row", gap: spacing.md },
   sectionTitle: { ...typeTokens.titleSm, color: colors.ink },
-  link: { ...typeTokens.bodySm, color: colors.action, fontWeight: "600" },
   list: { flex: 1 },
   taskRow: {
     flexDirection: "row",
     justifyContent: "space-between",
     alignItems: "center",
-    paddingVertical: spacing.md,
-    borderBottomWidth: 1,
-    borderBottomColor: colors.border,
+    padding: spacing.md,
+    backgroundColor: colors.surfaceLowest,
+    borderRadius: radius.xxl,
+    ...shadow.sm,
   },
   taskLeft: { flexDirection: "row", alignItems: "center", gap: spacing.sm, flex: 1 },
   avatar: {
-    width: 36,
-    height: 36,
+    width: 40,
+    height: 40,
     borderRadius: radius.lg,
-    backgroundColor: colors.surfaceContainer,
+    backgroundColor: colors.actionContainer,
     alignItems: "center",
     justifyContent: "center",
   },
-  avatarText: { ...typeTokens.labelBold, color: colors.primary },
+  avatarText: { ...typeTokens.labelBold, color: colors.actionOnContainer },
   taskName: { ...typeTokens.bodyMd, color: colors.ink, fontWeight: "600" },
   taskAddress: { ...typeTokens.bodySm, color: colors.inkVariant },
+  collectionHistoryRow: { flexDirection: "row", alignItems: "center", gap: spacing.xs, marginTop: 4 },
+  lastCollected: { ...typeTokens.bodySm, color: colors.inkVariant },
+  dotsRow: { flexDirection: "row", gap: 3 },
+  dot: { width: 6, height: 6, borderRadius: 3 },
+  taskRight: { flexDirection: "row", alignItems: "center", gap: spacing.xs },
   taskAmount: { ...typeTokens.bodyMd, color: colors.ink, fontWeight: "700" },
-  empty: { ...typeTokens.bodyMd, color: colors.inkVariant, textAlign: "center", padding: spacing.xl },
-  fab: {
-    position: "absolute",
-    right: spacing.lg,
-    bottom: spacing.xl,
-    width: 56,
-    height: 56,
-    borderRadius: 28,
-    backgroundColor: colors.action,
-    alignItems: "center",
-    justifyContent: "center",
-    elevation: 4,
-  },
-  fabText: { color: "#fff", fontSize: 28, lineHeight: 30, fontWeight: "600" },
-  backdrop: { flex: 1, backgroundColor: "rgba(15,23,42,0.5)", justifyContent: "flex-end" },
-  menu: { backgroundColor: colors.surfaceLowest, borderTopLeftRadius: radius.xl, borderTopRightRadius: radius.xl, padding: spacing.lg, gap: spacing.sm },
-  menuItem: { paddingVertical: spacing.md },
-  menuItemText: { ...typeTokens.titleSm, color: colors.ink },
 });

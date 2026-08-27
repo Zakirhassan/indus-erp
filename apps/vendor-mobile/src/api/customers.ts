@@ -14,6 +14,7 @@ export interface CustomerListRow extends Customer {
   finalAmountPaise: number;
   advancePaise: number;
   balancePaise: number;
+  lastCollectionDate: string | null;
 }
 
 export async function listCustomers(params: {
@@ -62,4 +63,15 @@ export interface CreateCustomerInput {
 /** Submits a new customer + sale. Held pending — no ledger/inventory effect — until an admin approves it. */
 export async function createCustomer(input: CreateCustomerInput): Promise<CustomerWithSale> {
   return api.post<CustomerWithSale>("/api/customers", input);
+}
+
+export interface AddSaleItemInput {
+  productId: string;
+  adjustedPricePaise: number;
+  quantity: number;
+}
+
+/** Adds a product to an existing (approved) customer's sale — grows the balance and re-derives the installment plan. */
+export async function addSaleItem(customerId: string, input: AddSaleItemInput): Promise<CustomerWithSale> {
+  return api.post<CustomerWithSale>(`/api/customers/${customerId}/items`, input);
 }

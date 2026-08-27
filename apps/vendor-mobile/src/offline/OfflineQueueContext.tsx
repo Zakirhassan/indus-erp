@@ -1,7 +1,7 @@
 import { createContext, useContext, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import NetInfo from "@react-native-community/netinfo";
 import { isNetworkError } from "../lib/apiClient";
-import { submitCollectionBatch, type SaveBatchInput } from "../api/collections";
+import { saveDraftBatch, type SaveBatchInput } from "../api/collections";
 import { loadQueue, saveQueue, type QueuedBatchSubmission } from "./storage";
 
 interface OfflineQueueContextValue {
@@ -10,11 +10,11 @@ interface OfflineQueueContextValue {
   isOnline: boolean;
   syncing: boolean;
   /**
-   * Submits a batch. If the server can't be reached, the batch is queued locally
-   * instead of failing the collector's submission — it's synced automatically
-   * once connectivity returns. Returns true if it queued instead of submitting live.
+   * Saves a batch as a draft. If the server can't be reached, it's queued locally
+   * instead of failing the collector's entry — it's synced automatically once
+   * connectivity returns. Returns true if it queued instead of saving live.
    */
-  submitOrQueue: (input: SaveBatchInput) => Promise<{ queued: boolean }>;
+  saveOrQueue: (input: SaveBatchInput) => Promise<{ queued: boolean }>;
 }
 
 const OfflineQueueContext = createContext<OfflineQueueContextValue | undefined>(undefined);
@@ -56,7 +56,7 @@ export function OfflineQueueProvider({ children }: { children: ReactNode }) {
     try {
       for (const item of current) {
         try {
-          await submitCollectionBatch(item.input);
+          await saveDraftBatch(item.input);
           remaining = remaining.filter((q) => q.id !== item.id);
           setQueue(remaining);
           await saveQueue(remaining);
@@ -87,9 +87,9 @@ export function OfflineQueueProvider({ children }: { children: ReactNode }) {
       pendingCount: queue.length,
       isOnline,
       syncing,
-      async submitOrQueue(input) {
+      async saveOrQueue(input) {
         try {
-          await submitCollectionBatch(input);
+          await saveDraftBatch(input);
           return { queued: false };
         } catch (err) {
           if (!isNetworkError(err)) throw err;
