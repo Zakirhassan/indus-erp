@@ -2,7 +2,7 @@ import type { NextFunction, Request, Response } from "express";
 import { recordAuditLog } from "@indus/db";
 
 const REDACTED = "[REDACTED]";
-const SENSITIVE_KEYS = new Set(["password", "passwordHash", "token", "accessToken", "refreshToken"]);
+const SENSITIVE_KEYS = new Set(["password", "passwordHash", "token", "accessToken", "refreshToken", "tempPassword"]);
 const MAX_BODY_CHARS = 4000;
 
 function redact(value: unknown, depth = 0): unknown {

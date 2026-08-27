@@ -5,7 +5,6 @@ import { Button } from "../components/Button";
 import { StatusBadge } from "../components/StatusBadge";
 import { Field, inputClass } from "../components/form/Field";
 import { Modal } from "../components/Modal";
-import { devResetDemoData } from "../mock/api";
 import { listFields, upsertField } from "../api/fields";
 import { inviteUser, listUsers } from "../api/users";
 
@@ -295,7 +294,6 @@ function UserManagementTab() {
 
 export function SettingsPage() {
   const [tab, setTab] = useState<Tab>("profile");
-  const [resetDone, setResetDone] = useState(false);
 
   const tabs: { id: Tab; label: string }[] = [
     { id: "profile", label: "Company Profile" },
@@ -322,27 +320,6 @@ export function SettingsPage() {
       {tab === "profile" && <CompanyProfileTab />}
       {tab === "fields" && <FieldRoutesTab />}
       {tab === "users" && <UserManagementTab />}
-
-      <div className="mt-8 max-w-xl rounded-lg border border-dashed border-border-outline p-4 text-body-sm text-ink-variant">
-        <div className="mb-2 font-semibold text-ink">Developer</div>
-        <p className="mb-3">
-          This app runs against the real API and database. This button only resets the separate local demo-data sandbox
-          (browser localStorage) used before the backend existed — it has no effect on real data.
-        </p>
-        <Button
-          variant="secondary"
-          size="sm"
-          onClick={async () => {
-            if (!confirm("Reset the local demo-data sandbox? This cannot be undone.")) return;
-            await devResetDemoData();
-            setResetDone(true);
-            window.location.reload();
-          }}
-        >
-          Reset Local Demo Sandbox
-        </Button>
-        {resetDone && <span className="ml-3 text-action">Reset — reloading…</span>}
-      </div>
     </div>
   );
 }

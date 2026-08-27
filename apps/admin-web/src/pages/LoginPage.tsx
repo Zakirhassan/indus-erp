@@ -8,7 +8,7 @@ export function LoginPage() {
   const { login } = useAuth();
   const navigate = useNavigate();
   const location = useLocation();
-  const [email, setEmail] = useState("admin@proledger.local");
+  const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
   const [showPassword, setShowPassword] = useState(false);
   const [remember, setRemember] = useState(true);
@@ -99,9 +99,6 @@ export function LoginPage() {
         <p className="mt-6 text-center text-body-sm text-ink-variant">
           This portal is for Admin and Collector staff accounts only.
         </p>
-        <div className="mt-4 rounded border border-border bg-surface-low p-3 text-body-sm text-ink-variant">
-          Demo credentials: <strong>admin@proledger.local</strong> / <strong>admin123</strong>
-        </div>
       </div>
     </div>
   );
