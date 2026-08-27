@@ -1,7 +1,7 @@
 # Build context is the repo root (see docker-compose.yml: context: ., dockerfile:
 # services/api/Dockerfile) — needed so npm workspaces can resolve @indus/* siblings.
 
-FROM node:20-alpine AS builder
+FROM node:26-alpine AS builder
 WORKDIR /app
 
 COPY package.json package-lock.json ./
@@ -26,7 +26,7 @@ RUN npm run build \
   -w packages/db \
   -w services/api
 
-FROM node:20-alpine AS runtime
+FROM node:26-alpine AS runtime
 WORKDIR /app
 ENV NODE_ENV=production
 
