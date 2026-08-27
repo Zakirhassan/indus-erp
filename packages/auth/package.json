@@ -13,11 +13,11 @@
   "dependencies": {
     "@indus/config": "*",
     "@indus/shared-types": "*",
-    "bcryptjs": "^2.4.3",
+    "bcryptjs": "^3.0.3",
     "jsonwebtoken": "^9.0.2"
   },
   "devDependencies": {
-    "@types/bcryptjs": "^2.4.6",
+    "@types/bcryptjs": "^3.0.0",
     "@types/express": "^4.17.21",
     "@types/jsonwebtoken": "^9.0.7",
     "express": "^4.21.0"
