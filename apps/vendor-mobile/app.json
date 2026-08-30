@@ -6,7 +6,10 @@
     "version": "0.1.0",
     "orientation": "portrait",
     "userInterfaceStyle": "light",
-    "platforms": ["android", "web"],
+    "platforms": [
+      "android",
+      "web"
+    ],
     "icon": "./assets/icon.png",
     "splash": {
       "image": "./assets/splash.png",
@@ -22,7 +25,11 @@
       }
     },
     "extra": {
-      "apiUrl": "http://10.0.2.2:3000"
-    }
+      "apiUrl": "http://10.0.2.2:3000",
+      "eas": {
+        "projectId": "978e2ab9-41bd-4f32-b885-20b39dce7cc4"
+      }
+    },
+    "owner": "zaakir1122"
   }
 }
